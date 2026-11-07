@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { chownSync, readdirSync, lstatSync } from 'node:fs';
+import { chmodSync, chownSync, readdirSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 
 export interface GitResult { code: number; stdout: string; stderr: string }
@@ -42,10 +42,15 @@ export function parseGithubRepo(url: string): { owner: string; repo: string } | 
 }
 
 export function chownTree(dir: string, uid: number) {
-  if (typeof process.getuid !== 'function' || process.getuid() !== 0) return;
+  const root = typeof process.getuid === 'function' && process.getuid() === 0;
   const walk = (p: string) => {
-    chownSync(p, uid, uid);
-    if (lstatSync(p).isDirectory()) for (const e of readdirSync(p)) walk(path.join(p, e));
+    try {
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) return;
+      if (root) chownSync(p, uid, uid);
+      else chmodSync(p, st.mode | (st.isDirectory() ? 0o777 : 0o666)); // dev/CI: daemon is not root, make it writable for the container user
+    } catch { /* best effort */ }
+    if (lstatSync(p).isDirectory() && !lstatSync(p).isSymbolicLink()) for (const e of readdirSync(p)) walk(path.join(p, e));
   };
   walk(dir);
 }

@@ -102,7 +102,12 @@ export class TaskManager {
       if (n > 0 && !t.pushed) throw Object.assign(new Error(`branch ${t.branch} has ${n} unpushed commit(s)`), { code: 'UNPUSHED', unpushed: n });
     }
     await this.stop(id).catch(() => {});
-    await this.makeSandbox(t).destroy();
+    const sb = this.makeSandbox(t);
+    // A non-root daemon (dev/CI) cannot delete files the container user created: let the container do it.
+    if (typeof process.getuid === 'function' && process.getuid() !== 0 && (await sb.isRunning())) {
+      await sb.exec(['sh', '-c', 'rm -rf /workspace/* /workspace/.[!.]* 2>/dev/null; true']).catch(() => {});
+    }
+    await sb.destroy();
     rmSync(this.taskDir(t), { recursive: true, force: true });
     this.store.deleteTask(id);
   }
