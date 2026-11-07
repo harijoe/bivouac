@@ -70,6 +70,16 @@ beforeAll(async () => {
 
 const createdTasks: number[] = [];
 afterAll(async () => {
+  // diagnostics for CI: what did the tasks do?
+  for (const id of createdTasks) {
+    const t = store?.getTask(id);
+    if (!t || t.status === 'succeeded') continue;
+    console.log(`--- task ${id} status=${t.status} error=${t.error}`);
+    for (const e of store.listEvents(id).slice(-25)) console.log(e.kind, JSON.stringify(e.data).slice(0, 300));
+    console.log(await mgr.devLogs(id, 40));
+  }
+  const tl = await docker.getContainer(TRAEFIK).logs({ stdout: true, stderr: true, tail: 30 }).catch(() => '');
+  console.log('--- traefik\n' + tl.toString());
   for (const id of createdTasks) await mgr?.destroy(id, true).catch(() => {});
   await docker.getContainer(TRAEFIK).remove({ force: true }).catch(() => {});
 }, 120000);
