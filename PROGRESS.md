@@ -12,8 +12,21 @@ Ces points ne peuvent pas être testés de façon automatique (ils demandent ton
 5. **Ajout du connecteur MCP dans Claude.ai** (web et desktop), **Claude Code** (`claude mcp add --transport http …`) et **ChatGPT** (mode développeur) : le flux OAuth (métadonnées, DCR, PKCE) est testé avec le SDK officiel, pas avec ces trois clients réels. Points à surveiller : l'URL de retour de claude.ai / chatgpt.com (liste d'autorisation configurable via `BIVOUAC_OAUTH_REDIRECT_ALLOW`), l'affichage des annotations.
 6. Lecture critique de l'UI sur ton téléphone (captures dans `docs/screenshots`).
 
-## État v0.2
-(voir plus bas, section « Journal v0.2 »)
+## Journal v0.2 (2026-11-07)
+Tout est vérifié par moi (voir la liste « À valider manuellement » pour ce qui ne peut pas l'être).
+- **Architecture** : `web` (public, non-root, sans socket Docker) / `executor` (socket Docker, réseau interne `bivouac-ctl`, secret partagé, API étroite) ; Traefik en provider HTTP alimenté par la base (renommage ≈ 7-10 s, sans redémarrer le conteneur, dont l'émission du certificat du nouvel hôte), forwardAuth vers `web` (ticket propriétaire, liens de partage, cookie de preview retiré avant l'app). Tailscale entièrement retiré.
+- **Tests** : 70 unitaires (noms, tickets/partages, routes dynamiques, tokens GitHub limités avec API mockée, manifest mocké, setup-token avec faux CLI + vraie sortie capturée, OAuth : PKCE/rotation/réutilisation/révocation/URLs refusées, MCP via SDK officiel, API executor) ; 3 tests d'intégration en conteneurs réels (topologie web/executor/Traefik réelle) — ils ont trouvé deux vrais bugs (redirection relative réécrite par Traefik, route SPA `/oauth/authorize`).
+- **E2E sur VM Hetzner neuve** (installation par la commande du README, certificat Let's Encrypt réel, client MCP du SDK officiel depuis ce VPS) : PASSÉ x2 (sslip.io, images construites sur la VM) ; PASSÉ sur `dev.deslope.com` avec l'IP réservée (étape domaine de l'assistant, puis e2e complet) ; PASSÉ avec le vrai CLI claude (tâche `succeeded`, 0,048 $) ; PASSÉ depuis GHCR `0.2.0` via `curl raw.githubusercontent.com … | sudo bash`. Chaque passage couvre aussi : web sans accès au socket, executor non résolvable depuis l'edge, réinstallation idempotente, désinstallation `--purge` propre.
+- **UI** : revue captures 390 px / 1280 px (clair et sombre) dans `docs/screenshots` ; corrigé : logo SVG (pas d'emoji), réglages repliés, boutons primaire/secondaire cohérents, formulaire d'autorisation (route SPA), états vides.
+- **Release** `v0.2.0` publiée (GitHub release, tag, CHANGELOG), images `ghcr.io/harijoe/bivouac-{daemon,task}` `0.2.0` et `latest` tirées anonymement ; CI verte sur `main` et sur le tag.
+- Nettoyage : 0 serveur Hetzner, 0 conteneur `bivouac*` sur ce VPS, IP réservée intacte.
+
+## Limites connues (v0.2)
+- Le flux manifest GitHub et la connexion GitHub réelle ne sont testés qu'avec GitHub mocké ; les clients Claude.ai / ChatGPT / Claude Code réels ne l'ont pas été (voir liste ci-dessus).
+- Interface en anglais uniquement.
+- Les certificats de preview sont émis par hôte (HTTP-01) : limite Let's Encrypt de 50 / semaine / domaine enregistré.
+- Pas de test arm64 ni Ubuntu 22.04 en conditions réelles ; sidecars non implémentés.
+- Les 3 tests d'intégration ont besoin d'Docker et de ports 80 libres sur la VM de test ; ils sont lancés en CI.
 
 ## Fait (v0.1)
 
@@ -53,3 +66,5 @@ Tous les points sont vérifiés.
 
 ## Décisions
 See docs/decisions.md.
+
+MISSION_V02_TERMINEE
