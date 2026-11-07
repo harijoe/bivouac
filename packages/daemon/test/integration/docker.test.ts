@@ -117,8 +117,9 @@ beforeAll(async () => {
     env: { ...common, BIVOUAC_DATA_DIR: dataDir, BIVOUAC_PORT: '3002' },
   });
   await mkContainer(C.web, DAEMON_IMAGE, {
+    cmd: ['sh', '-c', "git config --global --add safe.directory '*' && exec node packages/daemon/dist/index.js"],
     nets: [NET.edge, NET.ctl, NET.egress], user: '1000:1000', binds: [`${path.join(dataDir, 'web')}:/data`, `${reposDir}:${reposDir}:ro`],
-    env: { ...common, BIVOUAC_DATA_DIR: '/data', BIVOUAC_WEB_HOST: C.web, BIVOUAC_EXECUTOR_URL: `http://${C.executor}:3002`, CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-fake', BIVOUAC_TEST_MODE: '1', BIVOUAC_PUBLIC_IP: '127.0.0.1' },
+    env: { ...common, BIVOUAC_DATA_DIR: '/data', BIVOUAC_WEB_HOST: C.web, BIVOUAC_EXECUTOR_URL: `http://${C.executor}:3002`, CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-fake', BIVOUAC_TEST_MODE: '1', HOME: '/tmp', BIVOUAC_PUBLIC_IP: '127.0.0.1' },
   });
   await mkContainer(C.traefik, 'traefik:v3.6', {
     nets: [NET.edge], ports: { '80/tcp': String(HTTP_PORT) },
