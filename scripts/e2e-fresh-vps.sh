@@ -101,7 +101,7 @@ SSHR 'docker ps --format "{{.Names}} {{.Status}}" | grep ^bivouac' | sed 's/^/  
 SSHR '! docker inspect bivouac-web --format "{{json .HostConfig.Binds}}" | grep -q docker.sock' && say "web has no Docker socket mounted"
 SSHR '! docker exec bivouac-web test -e /var/run/docker.sock' && say "web cannot see the Docker socket"
 SSHR '[ "$(docker inspect bivouac-traefik --format "{{json .NetworkSettings.Networks}}" | jq -r "keys|join(\",\")")" = bivouac-edge ]' && say "Traefik is on the edge network only"
-SSHR '! docker exec bivouac-traefik getent hosts bivouac-executor' && say "the executor does not resolve from the public edge"
+SSHR '! timeout 30 docker exec bivouac-traefik getent hosts bivouac-executor' && say "the executor does not resolve from the public edge"
 SSHR 'stat -c "%a %n" /etc/bivouac/bivouac.env /var/lib/bivouac/web/secret.key' | sed 's/^/  vm| /'
 SSHR 'ss -Hltn | awk "{print \$4}" | sort -u' | sed 's/^/  vm| listening: /'
 

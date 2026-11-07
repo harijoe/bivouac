@@ -48,7 +48,7 @@ const get = (host: string, p: string, o: { cookie?: string; method?: string; bod
 const cookieOf = (r: Res) => String((r.headers['set-cookie'] as string[] | undefined)?.[0] ?? '').split(';')[0];
 const hostOf = (name: string, project: string) => `${name}.${project}.${DOMAIN}`;
 const pathOf = (u: string) => { const x = new URL(u); return x.pathname + x.search; };
-const sh = (cmd: string[]) => execFileSync('docker', cmd, { encoding: 'utf8' }).trim();
+const sh = (cmd: string[]) => execFileSync('docker', cmd, { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
 let dataDir: string, reposDir: string;
 let sessionCookie = '';

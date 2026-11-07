@@ -1,9 +1,22 @@
 # PROGRESS
 
 ## BLOQUÉ / questions
-- Aucun. Q1 (repo + packages GHCR publics) et Q2 (lecture Actions) sont résolus: pull anonyme vérifié (`edge` et `0.1.0`, daemon et task), CI lue via l'API GitHub.
+- Aucun pour l'instant. (`dev.deslope.com` et `*.dev.deslope.com` résolvent déjà vers 78.47.63.246.)
 
-## Fait
+## À valider manuellement par Julien
+Ces points ne peuvent pas être testés de façon automatique (ils demandent ton compte GitHub, ton compte Claude ou tes apps de chat). Tout le reste est couvert par les tests unitaires, d'intégration et e2e.
+1. **Création réelle de la GitHub App** : ouvrir le lien d'installation, étape « GitHub » → GitHub demande de confirmer le nom de l'app → retour sur bivouac. (Le flux manifest est testé avec GitHub mocké ; la forme exacte du manifest n'a jamais été acceptée par github.com.)
+2. **Connexion GitHub réelle** : « Se connecter avec GitHub » après la création ; vérifier que tu deviens administrateur, puis ajouter un second compte / une organisation dans Réglages > Qui peut se connecter.
+3. **Choix des repos** : « Choisir les repos sur GitHub » → installation de l'app → retour automatique sur l'assistant ; ajouter un repo comme projet ; vérifier qu'un `push` et une PR fonctionnent avec le token limité au repo (permissions contents + pull requests).
+4. **Connexion Claude réelle** depuis le dashboard (`claude setup-token` dans le conteneur : URL, code collé, token stocké). Le parseur est testé sur la vraie sortie capturée du CLI 2.1.319, mais jamais bout en bout avec ton compte.
+5. **Ajout du connecteur MCP dans Claude.ai** (web et desktop), **Claude Code** (`claude mcp add --transport http …`) et **ChatGPT** (mode développeur) : le flux OAuth (métadonnées, DCR, PKCE) est testé avec le SDK officiel, pas avec ces trois clients réels. Points à surveiller : l'URL de retour de claude.ai / chatgpt.com (liste d'autorisation configurable via `BIVOUAC_OAUTH_REDIRECT_ALLOW`), l'affichage des annotations.
+6. Lecture critique de l'UI sur ton téléphone (captures dans `docs/screenshots`).
+
+## État v0.2
+(voir plus bas, section « Journal v0.2 »)
+
+## Fait (v0.1)
+
 - M1: monorepo, task image (real CLI verified as non-root in the container with the OAuth token), real stream-json fixture.
 - M2: daemon (SQLite store, runner / success loop, budgets, sandbox abstraction, host-side git, REST + SSE API): 24 unit tests with the fake claude.
 - M3: Docker integration test (real Docker + Traefik v3.6 + fake claude): two parallel tasks on one project, previews through Traefik on distinct hostnames, live update of a file visible in the preview of that task only, cleanup. Passes locally.
@@ -40,5 +53,3 @@ Tous les points sont vérifiés.
 
 ## Décisions
 See docs/decisions.md.
-
-MISSION_TERMINEE
