@@ -47,6 +47,7 @@ let remote: string;
 
 beforeAll(async () => {
   if (!process.env.BIVOUAC_TEST_IMAGE) execSync(`docker build -q -t ${IMAGE} ${path.join(repoRoot, 'packages/task-image')}`, { stdio: 'inherit' });
+  execSync('docker image inspect traefik:v3.6 >/dev/null 2>&1 || docker pull -q traefik:v3.6', { stdio: 'inherit' });
   await docker.getContainer(TRAEFIK).remove({ force: true }).catch(() => {});
   const tr = await docker.createContainer({
     name: TRAEFIK, Image: 'traefik:v3.6', Labels: { 'bivouac.managed': 'false', 'bivouac.dev': 'true' },
