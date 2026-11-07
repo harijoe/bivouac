@@ -32,10 +32,13 @@ switch (cmd) {
     console.log(auth.createSession(id, 'test'));
     break;
   }
+  case 'status':
+    console.log(`admin=${auth.hasAdmin() ? 'yes' : 'no'}\ndomain=${cfg.domain}\nsetup_open=${auth.setupOpen() ? 'yes' : 'no'}`);
+    break;
   case 'domain':
     console.log(cfg.domain);
     break;
   default:
-    console.error('usage: bivouac <setup-link | reset-admin | session create --github-id <id> | domain>');
+    console.error('usage: bivouac <setup-link | reset-admin | status | session create --github-id <id> | domain>');
     process.exit(cmd ? 2 : 0);
 }

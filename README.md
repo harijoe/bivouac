@@ -1,170 +1,175 @@
-# ⛺ bivouac
+# bivouac
 
-**bivouac runs several Claude Code agents in parallel on one VPS — each in its own container, each with a live preview URL of the app it is building — and gives you a web dashboard to follow their progress, tokens and cost.**
-You give an agent a prompt, a "success command" (e.g. `pnpm test && pnpm build`) and a budget; bivouac runs the official `claude` CLI, checks the result itself, and sends the agent back to work with the failure output until the check passes or the budget is spent.
-Everything is private by default: the dashboard and the previews are only reachable through your [Tailscale](https://tailscale.com) network.
+**Run several Claude Code agents in parallel on your own server, and drive them from a Claude or ChatGPT conversation.**
 
-![bivouac dashboard](docs/screenshots/task.png)
+Each agent works in its own container, on its own git branch, and gets a live preview URL of the app it is building. You install bivouac with one command, click through a short setup page, add it as a connector in your chat app, and then just ask: *“Using bivouac, add a dark mode to my-app.”* The dashboard is there to follow, stop and configure.
 
-<p align="center"><img src="docs/screenshots/project.png" alt="project tasks" width="48%"> <img src="docs/screenshots/mobile.png" alt="mobile view" width="22%"></p>
-
-> **About Claude subscriptions.** bivouac does not talk to the Anthropic API itself and does not reimplement any login: it launches the **official `claude` CLI** inside each task container. If you authenticate with a Claude subscription (`claude setup-token`), the consumption counts as normal Claude Code usage on that subscription and is subject to its limits, and Anthropic's usage policy may change over time. That is why bivouac also supports a plain `ANTHROPIC_API_KEY` (pay-as-you-go) — use whichever fits your plan and Anthropic's current terms.
+<p align="center">
+  <img src="docs/screenshots/home-mobile.png" alt="Tasks on a phone" width="260">
+  &nbsp;
+  <img src="docs/screenshots/task-mobile.png" alt="A task: progress, preview, share links" width="260">
+</p>
+<p align="center"><img src="docs/screenshots/home-desktop.png" alt="Dashboard on a desktop browser" width="640"></p>
 
 ## Contents
-[Prerequisites](#prerequisites) · [Install](#install) · [First project and task](#first-project-and-task) · [`bivouac.yml`](#bivouacyml) · [Custom domain and TLS](#custom-domain-and-tls) · [Security](#security) · [Update / uninstall](#update-and-uninstall) · [Troubleshooting](#troubleshooting) · [Development](#development) · [License](#license)
 
-## Prerequisites
+[What you need](#what-you-need) · [Install](#install) · [The setup page](#the-setup-page) · [Connect your chat](#connect-your-chat) · [Daily use](#daily-use) · [Sharing a preview](#sharing-a-preview) · [Project configuration](#project-configuration-bivouacyml) · [Your own domain](#your-own-domain) · [Security model](#security-model) · [Update and uninstall](#update-and-uninstall) · [Troubleshooting](#troubleshooting) · [Claude subscriptions](#about-claude-subscriptions) · [Development](#development)
 
-| What | Details |
-| --- | --- |
-| A VPS | Ubuntu **24.04** (22.04 works too), x86-64 or arm64. Recommended: **4 vCPU / 8 GB RAM / 80 GB disk** for 3–4 parallel tasks (minimum 2 vCPU / 4 GB for one or two). Root (sudo) access. |
-| Tailscale | A free account at <https://login.tailscale.com>, and Tailscale installed on the devices you will browse from (Mac, phone…). |
-| Claude access | Either a Claude subscription (you will create a long-lived token with `claude setup-token`) **or** an Anthropic API key. |
-| GitHub token | A fine-grained personal access token limited to the repositories you want agents to work on (see below). |
+## What you need
 
-### Getting each credential
+- A server (VPS) with a **fresh Ubuntu 24.04** (22.04 also works), 2 vCPU and 4 GB of RAM at least; 4 vCPU / 8 GB is comfortable for several agents. Any provider works.
+- **Ports 80 and 443 reachable from the internet** (open them in your provider's firewall). bivouac gets a free HTTPS certificate from Let's Encrypt.
+- A **GitHub account** (you sign in with it).
+- A **Claude subscription** or an **Anthropic API key** (you connect it in the setup page).
+- A Claude or ChatGPT account to talk to it.
 
-- **Tailscale auth key** (optional but recommended for unattended installs): <https://login.tailscale.com/admin/settings/keys> → *Generate auth key*. Without it, the installer prints a login URL instead.
-- **Claude token**: on any machine where Claude Code is installed and logged in, run `claude setup-token` and copy the `sk-ant-oat01-…` token it prints. For an API key, create one at <https://console.anthropic.com/settings/keys> (`sk-ant-api…`).
-- **GitHub token**: <https://github.com/settings/personal-access-tokens/new> → *Only select repositories* → pick your project repo(s) → repository permissions **Contents: Read and write** and **Pull requests: Read and write** (Metadata read is implied). Give it a short expiry.
+You do not need a domain name: bivouac uses `<your-ip>.sslip.io` out of the box and can switch to your own domain later.
 
 ## Install
 
-On a fresh Ubuntu VPS, as a user with sudo. First (optionally) export your credentials so the installer does not need to ask:
-
-```bash
-export TS_AUTHKEY=tskey-auth-xxxxxxxx              # optional: otherwise a login URL is printed
-export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxxx   # or: export ANTHROPIC_API_KEY=sk-ant-api03-xxxx
-```
-
-Then run the installer:
+On the server, as root (or with `sudo`):
 
 <!-- e2e:install:start -->
 ```bash
-curl -fsSL https://raw.githubusercontent.com/harijoe/bivouac/main/install.sh | sudo -E bash
+curl -fsSL https://raw.githubusercontent.com/harijoe/bivouac/main/install.sh | sudo bash
 ```
 <!-- e2e:install:end -->
 
-The installer is idempotent. It: installs Docker (official repository) and Tailscale, joins your tailnet, creates `/etc/bivouac` (config, `600`) and `/var/lib/bivouac` (data), pulls the images for one pinned version, starts Traefik and the daemon through the `bivouac.service` systemd unit, waits for the health check, and prints:
+There are no questions. The installer installs Docker if needed, starts bivouac, gets a certificate for `https://<ip-with-dashes>.sslip.io`, and prints a **one-time setup link** with a QR code:
 
 ```
-  ⛺ bivouac 0.1.0 is running.
-  Dashboard:     http://100.64.1.2:3000
-  Access token:  3f9c…
-  Previews:      http://t-<id>.<project>.100-64-1-2.sslip.io
+  bivouac 0.2.0 is running. Open this link to finish the setup (it works once):
+
+    https://203-0-113-7.sslip.io/setup?code=K7QM-4TXD
 ```
 
-If you run it from a terminal without exporting anything, it asks for the Tailscale key, the Claude token and an optional domain. Useful variables: `TS_AUTHKEY`, `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`, `BIVOUAC_DOMAIN`, `BIVOUAC_TLS`, `BIVOUAC_VERSION`, `BIVOUAC_NONINTERACTIVE=1` (see the header of [`install.sh`](install.sh)).
+If the certificate cannot be obtained, the installer says exactly what to open in your provider's firewall (TCP 80 and 443) and how to retry.
 
-Open the dashboard URL from any device on your tailnet (`http://<tailscale-ip>:3000`) and paste the access token. If you did not provide Claude credentials, the dashboard shows a banner to add them.
+## The setup page
 
-## First project and task
+Open the link (on your phone, scan the QR code). Five short steps, one thing per screen:
 
-1. **Add a project** (dashboard → *+ Add project*): the git URL of your repo and the fine-grained GitHub token. bivouac checks that it can read the repository and detects its default branch.
-2. Add a [`bivouac.yml`](#bivouacyml) at the root of the repo (or set the same keys with the *Config* button).
-3. **New task**: write the prompt, optionally a success command and budgets, and press *Start task*.
-4. Watch it live: agent messages and tool calls (collapsible), the current iteration, tokens, estimated cost, the output of the last check, the dev-server logs, and a link to `http://t-<id>.<project>.<domain>` where the app runs in dev mode and updates as the agent edits files.
-5. While it works you can **send an instruction** (applied at the next iteration), **stop** it, **resume** it, **push** the branch (`agent/t-<id>-<slug>`) and **open a pull request**. Deleting a task removes its container and folder (with a confirmation if commits are not pushed).
+1. **Address**: keep the default, or enter your own domain (see [Your own domain](#your-own-domain)).
+2. **GitHub**: bivouac creates a **private GitHub App that belongs only to you** (GitHub asks you to confirm its name). It is used to sign you in and to reach the repositories you pick. You become the administrator and the setup link is closed for good.
+3. **Repositories**: choose which repositories the app may access, then add them as projects.
+4. **Claude**: click *Connect Claude*, sign in on claude.ai, paste the code it shows you. (Or paste an Anthropic API key instead.) The token is stored encrypted and is valid for one year; the dashboard shows when it expires and has a *Renew* button.
+5. **Chat**: copy the bivouac address into Claude or ChatGPT.
 
-Statuses: `queued → starting → running → checking → succeeded`, or `failed`, `budget_exceeded`, `max_iterations`, `stopped`.
+Lost the link or locked yourself out? On the server: `sudo bivouac reset-admin` prints a new one.
 
-Under the hood, for each task the daemon: clones your repo on the host (the GitHub token never enters the container), creates the branch, starts a non-root container, runs `setup`, starts the dev server under a supervisor (restarted if it crashes), then loops: `claude -p … --output-format stream-json --verbose --dangerously-skip-permissions` → run the success command → if it fails, `claude --resume <session>` with the (truncated) failure output. The cost cap is also passed to the CLI with `--max-budget-usd`.
+## Connect your chat
 
-## `bivouac.yml`
+bivouac exposes an **MCP server** at `https://<your-address>/mcp`. Add it as a custom connector:
+
+- **Claude (web or desktop)**: *Settings → Connectors → Add custom connector*, paste the address, *Connect*, sign in with GitHub, *Allow*.
+- **Claude Code**: `claude mcp add --transport http bivouac https://<your-address>/mcp`, then `/mcp` inside Claude Code to sign in.
+- **ChatGPT**: *Settings → Connectors → Advanced → Developer mode*, create a connector with the address and **OAuth** authentication.
+
+Connected apps are listed in **Settings → Connected chat apps**, with a one-click *Disconnect*.
+
+The tools your assistant gets: `list_projects`, `list_tasks`, `get_task`, `create_task`, `send_instruction`, `stop_task`, `resume_task`, `create_share_link`, `revoke_share_link`, `push_branch`, `open_pr`. Read-only tools are marked as such, so your chat app only asks for confirmation before actions that change something. `create_task` returns immediately; the assistant follows progress with `get_task`.
+
+## Daily use
+
+You: *“Using bivouac, in my-app, create a task `login-page`: add a login form with tests. Success means `pnpm test` passes.”*
+
+Claude creates the task and gives you its preview address, `https://login-page.my-app.<your-address>`. Ask for news (“how is login-page going?”), give instructions (“use the existing Button component”), stop it, and when you are happy: “push the branch” or “open a PR”.
+
+How a task works: the agent runs the official `claude` CLI in its container. When it stops, bivouac runs the **success command**; if it fails, the output goes back to the agent for another attempt, until it passes or a **budget** (attempts, dollars) is reached. Every task has a **name** (lowercase letters, digits, dashes; 1 to 40 characters, unique in its project). Names are never changed automatically: if one is taken you get a clear error and pick another.
+
+The dashboard shows what is running, with status, preview, and cost; each task has the agent's progress, the last check, dev-server logs, share links, and actions: stop, resume, rename, delete. **Renaming** takes effect immediately without restarting the container; the git branch keeps its name, and existing share links stop working.
+
+## Sharing a preview
+
+Previews are **private by default**: without access you see a clear “Access denied” page.
+
+- From the dashboard, *Open preview* gives you access through a one-time ticket.
+- To show it to someone else, create a **share link** (1 hour, 24 hours, 7 days, or no expiry) from the task page or ask your assistant. A link opens that one preview only, and you can list and revoke links at any time.
+
+## Project configuration (`bivouac.yml`)
+
+Optional file at the root of a repository (the dashboard's *Default limits* and per-project overrides sit on top of it):
 
 ```yaml
-setup: pnpm install            # run once per task workspace
+setup: pnpm install            # runs once per task workspace
 dev:
   command: pnpm dev --host 0.0.0.0
-  port: 5173                   # port the preview is routed to
+  port: 5173                   # the preview shows this port
 success: pnpm test && pnpm build
-limits:
-  cpus: 2
-  memory: 4g
-budget:
-  max_iterations: 10
-  max_cost_usd: 20
-  # max_tokens: 5000000        # input + output + cache-creation tokens
+limits: { cpus: 2, memory: 4g }
+budget: { max_iterations: 10, max_cost_usd: 20 }
 ```
 
-Precedence: built-in defaults < `bivouac.yml` in the repo < overrides saved from the dashboard < values given when creating the task. Task containers are built from the bivouac task image (Debian, git, Node 22, pnpm, the `claude` CLI); the optional `image:` key is reserved for derived images (`FROM ghcr.io/harijoe/bivouac-task`).
+See [`examples/vite-app`](examples/vite-app) for a working project.
 
-**Dev servers must accept the preview hostname.** Vite blocks unknown `Host` headers: set `server.allowedHosts: true` in `vite.config.ts` (see [`examples/vite-app`](examples/vite-app)). Next.js/webpack-dev-server have equivalents (`allowedDevOrigins`, `allowedHosts: 'all'`). Bind to `0.0.0.0`.
+## Your own domain
 
-## Custom domain and TLS
+In the setup page (or later in *Settings → More settings → Address*), enter a domain such as `bv.example.com`. bivouac shows the two DNS records to create at your registrar:
 
-By default previews use [sslip.io](https://sslip.io): `t-42.my-app.100-64-1-2.sslip.io` resolves to `100.64.1.2` (your VPS' Tailscale IP) with no DNS setup, and works from any device on the tailnet.
+| Type | Name | Value |
+|------|------|-------|
+| A | `bv` | your server's IP |
+| A | `*.bv` | your server's IP |
 
-To use your own domain: create a wildcard DNS record `*.preview.example.com → <Tailscale IP of the VPS>` (an `A` record to a private `100.x` address is fine) and install with `BIVOUAC_DOMAIN=preview.example.com`. Previews become `http://t-42.my-app.preview.example.com`.
+Click **Verify**: bivouac waits for the records, gets the certificate and moves you to the new address. Changing the domain later **recreates the GitHub App** (its URLs are tied to the domain) and **disconnects your chat connectors**: reconnect them with the new address. Preview certificates are issued per preview, on demand (HTTP-01), so no DNS provider access is needed. Let's Encrypt allows 50 new certificates per week per registered domain; a rename needs one.
 
-For HTTPS with Let's Encrypt (DNS-01 challenge through Cloudflare, so nothing needs to be exposed publicly), put the domain on Cloudflare and use a token with *Zone → DNS → Edit*:
+## Security model
 
-```bash
-export BIVOUAC_DOMAIN=preview.example.com BIVOUAC_TLS=cloudflare
-export CF_DNS_API_TOKEN=xxxx ACME_EMAIL=you@example.com
-curl -fsSL https://raw.githubusercontent.com/harijoe/bivouac/main/install.sh | sudo -E bash
-```
+**What is public**: the sign-in page, the setup page (only with the one-time link), the OAuth endpoints, `/mcp` (requires a token), and previews (require a ticket or a share link). Everything else requires a session.
 
-Traefik requests a certificate per preview host on first use (rate limits of Let's Encrypt apply).
+**Who can sign in**: only GitHub accounts you allow, identified by their **numeric GitHub id** (a login can be renamed or reused). The administrator can add people, or allow all members of an organisation or team. Sessions last 30 days (`HttpOnly`, `Secure`, `SameSite=Lax`, bound to the dashboard host). **Turn on two-factor authentication on your GitHub account**: it is the key to your server.
 
-*Public previews:* creating a task with *Public preview* enables HTTP basic auth (user `preview`, a generated password shown once) on its router. It only helps if you also make the VPS reachable from the internet, which the default install deliberately is not.
+**Two services, one with Docker access**: the public `web` service has **no access to the Docker socket**; the `executor` service, which does, is reachable only from `web` on an internal Docker network, through a narrow authenticated API (start, stop, logs, run a command in a task container). A flaw in the public side does not give control of the machine.
 
-## Security
+**GitHub access**: for every git operation bivouac mints a short-lived token limited to **one repository** and the permissions needed (contents, pull requests). That token never enters a task container. Fine-grained personal tokens remain possible as an advanced option.
 
-**Network.** The daemon (dashboard + API) and Traefik listen **only on the VPS' Tailscale IP**; nothing is published on the public interface. The API additionally requires the access token (stored in `/etc/bivouac/bivouac.env`, mode 600). Secrets (GitHub tokens, Claude credentials entered in the dashboard) are encrypted at rest in SQLite with AES-256-GCM; the key is `/var/lib/bivouac/secret.key` (mode 600), outside the database.
+**Previews**: the code of a preview is written by an agent, so it is treated as untrusted. The dashboard cookie is never sent to previews (host-only cookie), the preview cookie is removed before the request reaches the app, and tickets are single-use.
 
-**One-way Tailscale ACL.** Your devices should reach the VPS; the VPS (and so any agent that escaped its container) should reach nobody. Tag the VPS `tag:bivouac` (use an auth key created with that tag, or `tailscale up --advertise-tags=tag:bivouac`) and paste this in <https://login.tailscale.com/admin/acls> (adapt the `tagOwners` / your own rules):
+**MCP**: OAuth 2.1 with PKCE (S256 only), dynamic client registration, one-hour access tokens, rotating refresh tokens (reuse revokes the connection), tokens stored hashed. Redirect URIs are limited to claude.ai, chatgpt.com and localhost. Authorization needs a signed-in user clicking *Allow*.
 
-```json
-{
-  "tagOwners": { "tag:bivouac": ["autogroup:admin"] },
-  "acls": [
-    { "action": "accept", "src": ["autogroup:member"], "dst": ["tag:bivouac:*"] }
-  ]
-}
-```
+**Also**: rate limiting and temporary blocking on public endpoints, a strict Content-Security-Policy, an audit log (*Settings → Recent activity*), secrets encrypted at rest with a key outside the database.
 
-Tailscale ACLs are deny-by-default and stateful: replies to your connections work, but with no rule whose `src` is `tag:bivouac`, the VPS cannot open connections to any of your devices. (If you already have other rules, keep them and just make sure none has `tag:bivouac` as a source.)
-
-**Tokens.** Use fine-grained GitHub tokens limited to the project repositories (Contents + Pull requests only). The GitHub token stays in the daemon: clone and push run on the host and the token is never put in a task container or in `.git/config`. The Claude credential **is** exposed to the agent process (it needs it to run); use a dedicated token/key with a spend limit.
-
-**What an agent can and cannot reach.** Each task runs as an unprivileged user (`node`, uid 1000) in its own container and its own Docker network, with `no-new-privileges`, CPU and memory limits, and **no Docker socket**. It can: read/write its workspace, use the internet (including your Claude token), reach the host's Docker bridge gateway, and run anything inside the container (`--dangerously-skip-permissions`). It cannot: see other tasks' files or dev servers (separate networks and workspaces), control Docker, read the GitHub token or the bivouac database. Treat the VPS as dedicated to this purpose: the daemon container does mount the Docker socket (it must manage containers), which is root-equivalent on the host — that is why the dashboard is tailnet-only and token-protected.
+**What an agent can reach**: its own container (non-root, no Docker socket, CPU and memory limits), its repository checkout, and the internet. It cannot see other tasks or the host. Agents run with permissions checks disabled inside their sandbox: give them only repositories you are comfortable with.
 
 ## Update and uninstall
 
-- **Update**: re-run the install command (optionally with `BIVOUAC_VERSION=x.y.z`). Settings and data are kept; running task containers are left alone, interrupted runs are marked `stopped` and can be resumed.
-- **Uninstall**: `sudo bash /opt/bivouac/uninstall.sh` removes the service, containers and networks and keeps `/var/lib/bivouac`; add `--purge` to delete all data and configuration. Docker and Tailscale are not removed.
+**Update**: run the install command again. It keeps your data and settings, including from a 0.1.x installation (Tailscale is no longer used; the 0.1 database is migrated).
+
+**Uninstall**: `sudo bash /opt/bivouac/uninstall.sh` removes the service and containers; add `--purge` to delete all data and the images.
 
 ## Troubleshooting
 
-| Symptom | Fix |
-| --- | --- |
-| Installer: `Unsupported OS` | Use Ubuntu 22.04/24.04. |
-| Installer waits at Tailscale login | Open the printed URL, or pass `TS_AUTHKEY`. |
-| Installer: `Cannot pull …` | Images are private or the version does not exist: check `BIVOUAC_VERSION`, or set `BIVOUAC_REGISTRY_USER` / `BIVOUAC_REGISTRY_TOKEN`. |
-| Dashboard unreachable | Your device must be on the tailnet; use the **Tailscale IP** of the VPS (`tailscale ip -4` on the VPS). `docker logs bivouac-daemon`. |
-| Preview shows `404 page not found` | The task container is not up yet, or `dev.port` in `bivouac.yml` does not match the port the dev server listens on. See the *Dev server logs* tab. |
-| Preview shows `Blocked request. This host is not allowed` | Vite: set `server.allowedHosts: true`. |
-| Preview hostname does not resolve | sslip.io needs public DNS; or use your own wildcard record. Test: `dig +short t-1.x.100-64-1-2.sslip.io`. |
-| Task `failed` right away with an authentication error | Add/replace the Claude token in the dashboard or `/etc/bivouac/bivouac.env` (then `systemctl restart bivouac`). |
-| Task `failed` at `setup` | The `setup` command exited non-zero; open the first events of the task for its output. |
-| `budget_exceeded` / `max_iterations` | Raise the limit (`PATCH /api/tasks/<id>`) and press *Resume*. |
-| Everything is slow / OOM | Lower `limits.memory`/`BIVOUAC_MAX_PARALLEL`, or use a bigger VPS. |
+| Symptom | What to do |
+|---|---|
+| The installer says it could not get a certificate | Open **TCP 80 and 443** in your provider's firewall (and `ufw allow 80,443/tcp` if the server has one), then run the installer again. |
+| “Port 80/443 is already used” | Another web server runs on the machine. Stop it or move it, then run the installer again. |
+| Lost the setup link / cannot sign in | `sudo bivouac reset-admin` prints a new link. |
+| “This GitHub account is not allowed” | An administrator adds you in *Settings → Who can sign in*. |
+| A task fails with a Claude error | *Settings → Claude → Renew* (tokens last a year). |
+| `bivouac: command not found` | The installer did not finish; run it again. |
+| A preview shows “Bad Gateway” | The dev server is not up yet or crashed: see *Dev server logs* in the task. |
+| Preview certificate warning right after a rename | The certificate for the new address is being issued (a few seconds). |
+| Chat app cannot connect | Check the address ends with `/mcp`, that it uses HTTPS, and that you signed in with an allowed GitHub account. |
 
-Logs: `docker logs -f bivouac-daemon`, `docker logs bivouac-traefik`; dev server log: `/var/lib/bivouac/projects/<project>/tasks/t-<id>/workspace/.bivouac/dev.log`.
+Logs: `docker logs bivouac-web`, `docker logs bivouac-executor`, `docker logs bivouac-traefik`.
+
+## About Claude subscriptions
+
+bivouac runs the **official `claude` CLI** and signs in through `claude setup-token`; it does not reimplement the API. Usage counts as Claude Code usage on your subscription, and Anthropic's policy on this may change, which is why using an **Anthropic API key** is supported too.
 
 ## Development
 
 ```bash
-pnpm install && pnpm build
-pnpm lint && pnpm typecheck && pnpm test       # unit tests (fake claude, no Docker needed)
-pnpm test:integration                           # real Docker + Traefik + fake claude, uses ports 8088 and the prefix bivouac-dev-
-scripts/e2e-fresh-vps.sh                        # fresh Hetzner VM, runs this README's install command (needs HCLOUD_TOKEN)
-scripts/e2e-fresh-vps.sh --real                 # same with the real claude CLI (small budget)
+pnpm install
+pnpm build && pnpm lint && pnpm typecheck && pnpm test    # unit tests, fake claude
+pnpm test:integration                                      # real Docker + Traefik + the daemon image
+node packages/daemon/dev/demo-server.mjs                   # the UI with demo data (no Docker)
+node scripts/screenshots.mjs                               # 390 px and 1280 px screenshots of every screen
+scripts/e2e-fresh-vps.sh [--real] [--domain] [--ghcr]      # end to end on a new Hetzner VM (needs HCLOUD_TOKEN)
 ```
 
-Layout: `packages/shared` (types, stream-json parser, config), `packages/daemon` (Hono API, SQLite, runner, dockerode), `packages/dashboard` (React + Vite), `packages/task-image` (task Dockerfile, supervisor, fake `claude` used in tests). Design decisions are in [`docs/decisions.md`](docs/decisions.md). The fake `claude` (`packages/task-image/fake-claude/claude`) is steered by markers in the prompt: `FAKE_SCENARIO=succeed|fail-then-succeed|always-fail`, `FAKE_COST=<usd>`, `FAKE_DELAY=<ms>`, `FAKE_CRASH=1`.
+Packages: `shared` (types, stream-json parser), `daemon` (web service, executor, CLI), `dashboard` (React), `task-image` (container image, fake claude).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT
