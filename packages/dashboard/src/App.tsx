@@ -214,7 +214,7 @@ function TaskPage({ id }: { id: number }) {
   useEffect(() => { setEvents([]); seen.current = new Set(); api('GET', `/api/tasks/${id}`).then(setTask).catch(() => setTask(null)); }, [id]);
   useStream(`/api/stream?task=${id}`, {
     task: (t) => { if (t.id === id) setTask((old) => ({ ...old, ...t })); },
-    event: (e: TaskEvent) => { if (seen.current.has(e.id)) return; seen.current.add(e.id); setEvents((old) => [...old, e]); },
+    event: (e: TaskEvent) => { if (seen.current.has(e.id)) return; seen.current.add(e.id); setEvents((old) => [...old, e].sort((a, b) => a.id - b.id)); },
   });
   useEffect(() => { if (follow) bottom.current?.scrollIntoView({ block: 'end' }); }, [events, follow, tab]);
   useEffect(() => {

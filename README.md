@@ -6,7 +6,7 @@ Everything is private by default: the dashboard and the previews are only reacha
 
 ![bivouac dashboard](docs/screenshots/task.png)
 
-<p align="center"><img src="docs/screenshots/home.png" alt="projects" width="48%"> <img src="docs/screenshots/mobile.png" alt="mobile view" width="22%"></p>
+<p align="center"><img src="docs/screenshots/project.png" alt="project tasks" width="48%"> <img src="docs/screenshots/mobile.png" alt="mobile view" width="22%"></p>
 
 > **About Claude subscriptions.** bivouac does not talk to the Anthropic API itself and does not reimplement any login: it launches the **official `claude` CLI** inside each task container. If you authenticate with a Claude subscription (`claude setup-token`), the consumption counts as normal Claude Code usage on that subscription and is subject to its limits, and Anthropic's usage policy may change over time. That is why bivouac also supports a plain `ANTHROPIC_API_KEY` (pay-as-you-go) — use whichever fits your plan and Anthropic's current terms.
 

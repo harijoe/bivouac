@@ -20,7 +20,7 @@ const cfg = { dataDir, port: Number(process.env.PORT ?? 3100), bind: '127.0.0.1'
 const store = new Store(path.join(dataDir, 'demo.db'), key);
 const sandboxes = new Map();
 const mgr = new TaskManager(store, cfg, (t) => {
-  if (!sandboxes.has(t.id)) sandboxes.set(t.id, new LocalSandbox(path.join(dataDir, 'ws', String(t.id))));
+  if (!sandboxes.has(t.id)) sandboxes.set(t.id, new LocalSandbox(mgr.hostWorkspace(t)));
   return sandboxes.get(t.id);
 });
 const remote = mkdtempSync(path.join(tmpdir(), 'bv-demo-remote-'));
