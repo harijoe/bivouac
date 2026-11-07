@@ -108,7 +108,10 @@ export class TaskManager {
       await sb.exec(['sh', '-c', 'rm -rf /workspace/* /workspace/.[!.]* 2>/dev/null; true']).catch(() => {});
     }
     await sb.destroy();
-    rmSync(this.taskDir(t), { recursive: true, force: true });
+    try { rmSync(this.taskDir(t), { recursive: true, force: true }); } catch (e) {
+      // only possible when the daemon is not root (dev/CI): files owned by the container user
+      if (typeof process.getuid === 'function' && process.getuid() === 0) throw e;
+    }
     this.store.deleteTask(id);
   }
 
