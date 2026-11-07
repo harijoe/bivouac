@@ -43,9 +43,12 @@ describe('traefik dynamic config', () => {
 describe('misc', () => {
   it('encrypts round trip and rejects tampering', () => {
     const k = randomBytes(32);
-    const e = encrypt(k, 'ghp_secret');
-    expect(e).not.toContain('ghp');
-    expect(decrypt(k, e)).toBe('ghp_secret');
+    const secret = 'ghp_secret_value_0123456789';
+    const e = encrypt(k, secret);
+    // the full plaintext must not appear (short fragments could match random base64 by chance)
+    expect(e).not.toContain(secret);
+    expect(e).not.toBe(secret);
+    expect(decrypt(k, e)).toBe(secret);
     expect(() => decrypt(randomBytes(32), e)).toThrow();
   });
   it('secrets are not stored in clear in sqlite', () => {
