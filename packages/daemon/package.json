@@ -1,0 +1,18 @@
+{
+  "name": "@bivouac/daemon", "version": "0.1.0", "type": "module", "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "test": "vitest run --exclude test/integration/**",
+    "test:integration": "vitest run test/integration --testTimeout 240000 --hookTimeout 240000"
+  },
+  "dependencies": {
+    "@bivouac/shared": "workspace:*",
+    "@hono/node-server": "^1.13.0",
+    "better-sqlite3": "^11.5.0",
+    "dockerode": "^4.0.2",
+    "hono": "^4.6.0"
+  },
+  "devDependencies": { "@types/better-sqlite3": "^7.6.11", "@types/dockerode": "^3.3.31", "@types/node": "^22.0.0" }
+}
