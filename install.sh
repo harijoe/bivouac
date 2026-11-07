@@ -15,6 +15,7 @@
 #   BIVOUAC_CLAUDE_BIN         claude binary inside task containers (default: claude; tests use /opt/bivouac/fake-claude)
 #   BIVOUAC_LISTEN_IP          IP to listen on (default: Tailscale IPv4). Use 0.0.0.0 ONLY if you know what you are doing.
 #   BIVOUAC_SKIP_TAILSCALE=1   do not install/configure Tailscale (requires BIVOUAC_LISTEN_IP)
+#   BIVOUAC_SOURCE_DIR         developer option: build the images from a source checkout instead of pulling them
 #   BIVOUAC_NONINTERACTIVE=1   never prompt
 set -euo pipefail
 
@@ -225,6 +226,11 @@ EOF
 systemctl daemon-reload
 
 # ---- images
+if [ -n "${BIVOUAC_SOURCE_DIR:-}" ]; then
+  log "Building images from $BIVOUAC_SOURCE_DIR"
+  docker build -q -t "$DAEMON_IMAGE" -f "$BIVOUAC_SOURCE_DIR/packages/daemon/Dockerfile" --build-arg "VERSION=$BV_VERSION" "$BIVOUAC_SOURCE_DIR" >/dev/null
+  docker build -q -t "$TASK_IMAGE" "$BIVOUAC_SOURCE_DIR/packages/task-image" >/dev/null
+fi
 if [ -n "${BIVOUAC_REGISTRY_TOKEN:-}" ]; then
   log "Logging in to ${REGISTRY%%/*}"
   echo "$BIVOUAC_REGISTRY_TOKEN" | docker login "${REGISTRY%%/*}" -u "${BIVOUAC_REGISTRY_USER:-bivouac}" --password-stdin >/dev/null
