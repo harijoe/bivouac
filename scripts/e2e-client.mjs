@@ -88,6 +88,21 @@ check(tools.length === 11 && tools.find((t) => t.name === 'list_projects').annot
 const call = async (name, a) => mcp.callTool({ name, arguments: a });
 check(toolJson(await call('list_projects', {})).some((p) => p.name === 'demo'), 'list_projects sees the project');
 
+if (!REAL) {
+  title('Connect Claude from the dashboard (setup-token in a throwaway container, fake CLI replaying the real output)');
+  const st0 = (await dash('GET', '/api/claude')).json;
+  check(st0.connected === false, 'Claude is not connected yet');
+  const noClaude = await call('create_task', { project: 'demo', name: 'nope', prompt: 'x' });
+  check(noClaude.isError && /connect Claude in the bivouac dashboard/.test(noClaude.content[0].text), 'create_task explains how to connect Claude');
+  const login = (await dash('POST', '/api/claude/login')).json;
+  const lst = await waitFor(async () => { const s = (await dash('GET', `/api/claude/login/${login.id}`)).json; return s.phase === 'waiting_code' ? s : false; }, 60000, 1500, 'sign-in URL');
+  check(/^https:\/\/claude\.com\/cai\/oauth\/authorize\?/.test(lst.url), 'sign-in URL extracted from the terminal output');
+  await dash('POST', `/api/claude/login/${login.id}/code`, { code: 'FAKE-CODE' });
+  await waitFor(async () => (await dash('GET', `/api/claude/login/${login.id}`)).json.phase === 'done', 60000, 1500, 'token');
+  const st1 = (await dash('GET', '/api/claude')).json;
+  check(st1.connected && st1.kind === 'oauth' && Date.parse(st1.expiresAt) > Date.now() + 360 * 86400e3, 'token stored, expiry one year away');
+}
+
 title(REAL ? 'a real task with the official claude CLI' : 'two parallel tasks with the fake claude');
 const specs = REAL
   ? [['alpha', 'Add a button that increments a counter on the home page, with a test.', 'pnpm test && pnpm build']]
