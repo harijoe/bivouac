@@ -2,6 +2,8 @@ name: ci
 on:
   push: { branches: [main], tags: ['v*'] }
   pull_request:
+env:
+  REGISTRY: ghcr.io
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -15,3 +17,55 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+  integration:
+    runs-on: ubuntu-24.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test:integration
+  images:
+    runs-on: ubuntu-24.04
+    needs: [test, integration]
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        with: { registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}' }
+      - id: meta
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; echo "tags=$v,latest" >> "$GITHUB_OUTPUT"; echo "version=$v" >> "$GITHUB_OUTPUT";
+          else echo "tags=edge,sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"; echo "version=edge" >> "$GITHUB_OUTPUT"; fi
+      - name: Build and push daemon
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/daemon/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          build-args: VERSION=${{ steps.meta.outputs.version }}
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.repo }}-daemon:${{ github.ref_type == 'tag' && steps.meta.outputs.version || 'edge' }}
+            ghcr.io/${{ steps.meta.outputs.repo }}-daemon:${{ github.ref_type == 'tag' && 'latest' || format('sha-{0}', github.sha) }}
+          cache-from: type=gha,scope=daemon
+          cache-to: type=gha,scope=daemon,mode=max
+      - name: Build and push task image
+        uses: docker/build-push-action@v6
+        with:
+          context: packages/task-image
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.repo }}-task:${{ github.ref_type == 'tag' && steps.meta.outputs.version || 'edge' }}
+            ghcr.io/${{ steps.meta.outputs.repo }}-task:${{ github.ref_type == 'tag' && 'latest' || format('sha-{0}', github.sha) }}
+          cache-from: type=gha,scope=task
+          cache-to: type=gha,scope=task,mode=max

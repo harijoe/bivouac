@@ -6,10 +6,11 @@
   the repo should be made public before v0.1.0 for the documented install to work. Needs owner decision (make repo public?).
 
 ## Fait
-- Real stream-json capture (fixtures).
+- M1: monorepo, task image (real CLI verified non-root in container with OAuth token), real stream-json fixture.
+- M2: daemon (SQLite store, runner/success loop, budgets, sandbox abstraction, git, REST+SSE API) — 24 unit tests green with fake claude.
 
 ## En cours
-- Milestone 1: monorepo scaffold.
+- M3: Docker integration (daemon image, Traefik compose, preview, parallel tasks).
 
 ## Décisions
 See docs/decisions.md.
