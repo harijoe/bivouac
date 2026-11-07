@@ -198,6 +198,7 @@ export class TaskManager {
       this.store.addEvent(id, 'system', { subtype: 'clone', branch: task.branch, base: task.baseBranch });
     }
     const eff = mergeConfig(this.readRepoConfig(task), project.config);
+    mkdirSync(path.join(hostWs, '.bivouac'), { recursive: true });
     chownTree(hostWs, this.cfg.taskUid);
     if (a.stop) return this.finishStopped(id);
 
