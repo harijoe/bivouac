@@ -67,8 +67,8 @@ function DomainStep({ st, code, next }: { st: SetupState; code: string; next: ()
       {phase !== 'idle' && <p className="note">{info}</p>}
       <ErrorNote>{a.error}</ErrorNote>
       <div className="actions">
-        <Button variant="primary" disabled={!d.includes('.') || phase !== 'idle'} busy={phase !== 'idle'} onClick={verify}>Verify</Button>
-        <Button variant="ghost" onClick={next}>Skip and keep {st.sslip ? 'this address' : st.domain}</Button>
+        <Button variant={d.includes('.') ? 'primary' : 'secondary'} disabled={!d.includes('.') || phase !== 'idle'} busy={phase !== 'idle'} onClick={verify}>Verify</Button>
+        <Button variant={d.includes('.') ? 'ghost' : 'primary'} onClick={next}>Keep {st.sslip ? 'this address' : st.domain}</Button>
       </div>
     </section>
   );

@@ -63,7 +63,7 @@ function Feed({ items }: { items: Item[] }) {
           );
           case 'check': return (
             <li key={it.id} className={`check ${it.ok ? 'ok' : 'bad'}`}>
-              <details open={!it.ok}><summary>{it.ok ? 'Check passed' : `Check failed (code ${it.exitCode})`} <code className="clip">{it.command}</code></summary><pre>{it.output}</pre></details>
+              <details open={!it.ok}><summary>{it.ok ? 'Check passed' : `Check failed (code ${it.exitCode})`} <code className="clip">{it.command}</code></summary>{it.output.trim() && <pre>{it.output}</pre>}</details>
             </li>
           );
           case 'note': return <li key={it.id} className={`note-line ${it.bad ? 'bad' : ''}`}>{it.text} {it.href && <a href={it.href} target="_blank" rel="noreferrer">Open</a>}</li>;

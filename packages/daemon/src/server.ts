@@ -208,7 +208,7 @@ export function createApp(ctx: Ctx) {
     app.use('/assets/*', serveStatic({ root: path.relative(process.cwd(), dir) || '.' }));
     app.get('/favicon.svg', serveStatic({ root: path.relative(process.cwd(), dir) || '.' }));
     app.get('*', (c) => {
-      if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/oauth/') || c.req.path.startsWith('/.well-known/')) return c.json({ error: 'not found' }, 404);
+      if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/.well-known/')) return c.json({ error: 'not found' }, 404);
       c.header('Cache-Control', 'no-store');
       return c.html(index());
     });

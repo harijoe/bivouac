@@ -45,7 +45,7 @@ export function ClaudeConnect({ status, onChange, primaryLabel }: { status: Clau
   if (!sessionId && phase !== 'error') {
     return (
       <div className="stack">
-        <Button variant="primary" onClick={start} busy={a.busy}>{label}</Button>
+        <Button variant={status?.connected && !status.expired ? 'secondary' : 'primary'} onClick={start} busy={a.busy}>{label}</Button>
         <ErrorNote>{a.error}</ErrorNote>
         <Details title="Use an API key instead">
           <form className="stack" onSubmit={(e) => { e.preventDefault(); void a.run(async () => { await api('PUT', '/api/claude/apikey', { key }); setKey(''); onChange(); }); }}>

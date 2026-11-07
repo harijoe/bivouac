@@ -13,7 +13,7 @@ function Header({ session }: { session: Session }) {
   const u = session.user;
   return (
     <header className="topbar">
-      <Link to="/" className="brand"><span aria-hidden>⛺</span> bivouac</Link>
+      <Link to="/" className="brand"><img src="/favicon.svg" alt="" width="26" height="26" className="logo" /> bivouac</Link>
       {u && (
         <div className="menu-wrap">
           <button className="avatar" aria-label="Menu" aria-expanded={open} onClick={() => setOpen(!open)}>

@@ -15,7 +15,7 @@ export function Login({ session }: { session: Session }) {
   const error = q.get('error');
   return (
     <section className="card center-card">
-      <div className="logo-lg" aria-hidden>⛺</div>
+      <img className="logo-lg" src="/favicon.svg" alt="" width="56" height="56" />
       <h1>bivouac</h1>
       <p className="muted">Your agents’ camp. Sign in to follow your tasks.</p>
       {error && <p className="note error">{ERRORS[error] ?? 'Sign-in failed. Please try again.'}</p>}
@@ -42,7 +42,7 @@ export function Authorize() {
   if (!info) return <Spinner />;
   return (
     <section className="card center-card">
-      <div className="logo-lg" aria-hidden>🔌</div>
+      <img className="logo-lg" src="/favicon.svg" alt="" width="56" height="56" />
       <h1>Allow {info.client.name}?</h1>
       <p className="muted"><b>{info.client.name}</b> ({info.redirectHost}) wants to use bivouac as <b>{info.user}</b>. It will be able to:</p>
       <ul className="rights">{info.rights.map((r) => <li key={r}>{r}</li>)}</ul>

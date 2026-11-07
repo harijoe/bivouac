@@ -54,7 +54,7 @@ export function Button({ children, variant = 'secondary', busy, ...p }: React.Bu
   return <button {...p} className={`btn ${variant} ${p.className ?? ''}`} disabled={p.disabled || busy}>{busy ? 'Please wait…' : children}</button>;
 }
 export function Empty({ icon, title, children }: { icon?: string; title: string; children?: ReactNode }) {
-  return <div className="empty"><div className="empty-icon" aria-hidden>{icon ?? '⛺'}</div><p className="empty-title">{title}</p>{children}</div>;
+  return <div className="empty"><img className="empty-icon" src="/favicon.svg" alt="" width="36" height="36" /><p className="empty-title">{title}</p>{children}</div>;
 }
 export function ErrorNote({ children }: { children: ReactNode }) { return children ? <p className="note error" role="alert">{children}</p> : null; }
 export function Spinner({ label = 'Loading…' }: { label?: string }) { return <p className="muted center">{label}</p>; }

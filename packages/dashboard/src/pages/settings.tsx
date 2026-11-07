@@ -111,14 +111,14 @@ function People({ s, reload }: { s: SettingsData; reload: () => void }) {
   const a = useAsync();
   return (
     <Section id="people" title="Who can sign in" hint={<p className="muted">People are identified by their permanent GitHub id. Administrators can always sign in.</p>}>
-      {s.users.map((u) => <div key={u.githubId} className="row-item"><span><b>{u.login}</b> <span className="muted">{u.role === 'admin' ? 'administrator' : 'member'}</span></span></div>)}
+      {s.users.filter((u) => !s.allowlist.some((e) => e.kind === 'user' && e.value === String(u.githubId))).map((u) => <div key={u.githubId} className="row-item"><span><b>{u.login}</b> <span className="muted">{u.role === 'admin' ? 'administrator' : 'member'}</span></span></div>)}
       {s.allowlist.map((e) => (
         <div key={e.id} className="row-item"><span className="clip"><b>{e.label ?? e.value}</b> <span className="tag">{e.kind === 'user' ? 'person' : e.kind === 'org' ? 'organisation' : 'team'}</span></span>
           <Button variant="ghost" onClick={() => a.run(async () => { await api('DELETE', `/api/settings/allowlist/${e.id}`); reload(); })}>Remove</Button></div>
       ))}
       {s.admin && (
         <form className="stack" onSubmit={(e) => { e.preventDefault(); void a.run(async () => { await api('POST', '/api/settings/allowlist', { kind, value }); setValue(''); reload(); }); }}>
-          <div className="copy-row">
+          <div className="stack wide-row">
             <select value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Type"><option value="user">Person</option><option value="org">Organisation</option><option value="team">Team</option></select>
             <input placeholder={kind === 'user' ? 'GitHub username' : kind === 'org' ? 'organisation name' : 'organisation/team-name'} value={value} onChange={(e) => setValue(e.target.value)} />
             <Button disabled={!value} busy={a.busy}>Allow</Button>
@@ -192,13 +192,14 @@ export function Settings() {
       <Section id="chat" title="Connect your chat"><ChatConnect mcpUrl={s.mcpUrl} /></Section>
       <Apps s={s} reload={load} />
       <People s={s} reload={load} />
-      <Defaults s={s} reload={load} />
-      {s.admin && <Domain s={s} />}
+      <Details title="More settings">
+        <Defaults s={s} reload={load} />
+        {s.admin && <Domain s={s} />}
+      </Details>
       <Section id="github" title="GitHub">
         {s.github.configured ? <p>Connected through your private app <b>{s.github.slug}</b>. {s.github.appUrl && <a href={s.github.appUrl} target="_blank" rel="noreferrer">Manage on GitHub</a>}</p> : <p className="note error">GitHub is not connected. Run <code>sudo bivouac reset-admin</code> on the server and follow the link.</p>}
       </Section>
       {s.admin && <Activity />}
-      <p className="muted center">bivouac {s.version}</p>
     </>
   );
 }
