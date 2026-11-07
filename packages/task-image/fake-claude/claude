@@ -9,6 +9,26 @@ import { execSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 const argv = process.argv.slice(2);
+
+// `claude setup-token`: replays the terminal output captured from the real CLI (URL, then "Paste code here if prompted >"),
+// accepts the code FAKE-CODE and prints a token wrapped like a terminal would wrap it.
+if (argv[0] === 'setup-token') {
+  const { readFileSync: rf, existsSync: ex } = await import('node:fs');
+  const fixture = [new URL('./setup-token.out', import.meta.url), '/opt/bivouac/setup-token.out'].map((p) => (p instanceof URL ? p.pathname : p)).find((p) => ex(p));
+  process.stdout.write(fixture ? rf(fixture, 'utf8') : 'Paste code here if prompted > ');
+  const { createInterface } = await import('node:readline');
+  const rl = createInterface({ input: process.stdin });
+  for await (const line of rl) {
+    if (line.trim() === 'FAKE-CODE') {
+      const tok = 'sk-ant-oat01-' + 'FAKE0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-0123456789abcdefghijklmnop'.slice(0, 90);
+      process.stdout.write(`\r\n\u2713 Long-lived authentication token created successfully!\r\n\r\nYour OAuth token (valid for 1 year):\r\n\r\n${tok.slice(0, 80)}\r\n${tok.slice(80)}\r\n\r\nStore this token securely. You won't be able to see it again.\r\n`);
+      process.exit(0);
+    }
+    process.stdout.write('\r\nInvalid code. Please try again.\r\n');
+    process.exit(1);
+  }
+  process.exit(1);
+}
 const flag = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : undefined; };
 if (argv.includes('--version')) { console.log('0.0.0-fake (Claude Code)'); process.exit(0); }
 const prompt = flag('-p') ?? '';

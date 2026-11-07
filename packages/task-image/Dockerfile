@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-cer
     && npm cache clean --force
 COPY supervisor.mjs /opt/bivouac/supervisor.mjs
 COPY fake-claude/claude /opt/bivouac/fake-claude
+COPY fake-claude/setup-token.out /opt/bivouac/setup-token.out
 # The base image already ships a non-root `node` user (uid 1000); the CLI refuses
 # --dangerously-skip-permissions as root, so everything runs as that user.
 RUN mkdir -p /workspace && chown node:node /workspace

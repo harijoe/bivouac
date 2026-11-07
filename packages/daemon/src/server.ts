@@ -1,174 +1,269 @@
-import { Hono, type Context } from 'hono';
-import { streamSSE } from 'hono/streaming';
-import { getCookie, setCookie } from 'hono/cookie';
+import { Hono } from 'hono';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { mergeConfig, parseProjectConfig, slugify, type Task } from '@bivouac/shared';
-import type { DaemonConfig } from './config.js';
-import { safeEqual } from './crypto.js';
-import type { Store, StoreMessage } from './db.js';
-import { detectDefaultBranch, fetchRepoFile } from './git.js';
-import type { TaskManager } from './runner.js';
+import { randomBytes } from 'node:crypto';
+import type { AppEnv, C, Ctx } from './context.js';
+import { clientIp } from './context.js';
+import { handleMcp } from './mcp.js';
+import { matchRedirect, OAuthError } from './oauth.js';
+import { randomToken } from './auth.js';
+import { baseUrl } from './config.js';
+import { apiRoutes } from './routes-api.js';
+import { setupRoutes } from './routes-setup.js';
+import { buildTraefikConfig } from './routes.js';
 
-const VERSION = process.env.BIVOUAC_VERSION ?? 'dev';
+export const VERSION = process.env.BIVOUAC_VERSION ?? 'dev';
 
-export function createApp(cfg: DaemonConfig, store: Store, mgr: TaskManager) {
-  const app = new Hono();
-  const bad = (c: Context, status: 400 | 404 | 409, message: string, extra: object = {}) => c.json({ error: message, ...extra }, status);
+export const sessionCookieName = (ctx: Ctx) => (ctx.cfg.previewScheme === 'https' ? '__Host-bv_session' : 'bv_session');
+export function setSessionCookie(ctx: Ctx, c: C, id: string) {
+  setCookie(c, sessionCookieName(ctx), id, { httpOnly: true, secure: ctx.cfg.previewScheme === 'https', sameSite: 'Lax', path: '/', maxAge: 30 * 86400 });
+}
 
-  app.get('/api/health', (c) => c.json({ ok: true, version: VERSION }));
-  app.post('/api/login', async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    if (!safeEqual(String(body.token ?? ''), cfg.accessToken)) return c.json({ error: 'invalid token' }, 401);
-    setCookie(c, 'bivouac_token', cfg.accessToken, { httpOnly: true, sameSite: 'Strict', path: '/', maxAge: 60 * 60 * 24 * 365 });
-    return c.json({ ok: true });
+const CSP = [
+  "default-src 'self'", "script-src 'self'", "style-src 'self'", "img-src 'self' https://avatars.githubusercontent.com data:", "font-src 'self'",
+  "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self' https://github.com",
+].join('; ');
+
+export function createApp(ctx: Ctx) {
+  const { cfg, store, auth, oauth, svc } = ctx;
+  const app = new Hono<AppEnv>();
+
+  // ---- security headers, session lookup, CSRF guard
+  app.use('*', async (c, next) => {
+    await next();
+    c.header('X-Content-Type-Options', 'nosniff');
+    c.header('Referrer-Policy', 'same-origin');
+    c.header('X-Frame-Options', 'DENY');
+    if (cfg.previewScheme === 'https') c.header('Strict-Transport-Security', 'max-age=31536000');
+    if (!c.req.path.startsWith('/mcp') && !c.req.path.startsWith('/oauth/token')) c.header('Content-Security-Policy', CSP);
   });
-  app.post('/api/logout', (c) => { setCookie(c, 'bivouac_token', '', { path: '/', maxAge: 0 }); return c.json({ ok: true }); });
-
-  app.use('/api/*', async (c, next) => {
-    const h = c.req.header('authorization');
-    const given = h?.startsWith('Bearer ') ? h.slice(7) : getCookie(c, 'bivouac_token') ?? '';
-    if (!safeEqual(given, cfg.accessToken)) return c.json({ error: 'unauthorized' }, 401);
+  app.use('*', async (c, next) => {
+    c.set('user', auth.getSession(getCookie(c, sessionCookieName(ctx))));
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) && !c.req.path.startsWith('/oauth/') && !c.req.path.startsWith('/mcp')) {
+      // Browsers always send Origin on cross-site and POST requests: refuse anything not coming from the dashboard itself.
+      const origin = c.req.header('origin');
+      if (origin && origin !== baseUrl(cfg) && !ctx.cfg.testMode) return c.json({ error: 'Cross-origin request refused.' }, 403);
+    }
     await next();
   });
 
-  app.get('/api/info', (c) => c.json({
-    version: VERSION, domain: cfg.domain, previewScheme: cfg.previewScheme, maxParallel: cfg.maxParallel,
-    auth: { oauth: !!(store.getSecretSetting('claude_oauth_token') ?? cfg.oauthToken), apiKey: !!(store.getSecretSetting('anthropic_api_key') ?? cfg.apiKey) },
-  }));
-  app.put('/api/settings', async (c) => {
-    const b = await c.req.json().catch(() => ({}));
-    if (b.claudeOauthToken !== undefined) store.setSecretSetting('claude_oauth_token', b.claudeOauthToken || null);
-    if (b.anthropicApiKey !== undefined) store.setSecretSetting('anthropic_api_key', b.anthropicApiKey || null);
-    return c.json({ ok: true });
-  });
-  app.get('/api/totals', (c) => c.json(store.totals()));
+  app.get('/api/health', (c) => c.json({ ok: true, version: VERSION }));
 
-  // ---- projects
-  app.get('/api/projects', (c) => c.json(store.listProjects().map((p) => ({ ...p, totals: store.totals(p.id) }))));
-  app.post('/api/projects', async (c) => {
-    const b = await c.req.json().catch(() => ({}));
-    const repoUrl = String(b.repoUrl ?? '').trim();
-    if (!repoUrl) return bad(c, 400, 'repoUrl is required');
-    const name = slugify(String(b.name ?? path.basename(repoUrl).replace(/\.git$/, '')), 24);
-    if (store.getProjectByName(name)) return bad(c, 409, `project "${name}" already exists`);
-    const token: string | null = b.githubToken || null;
-    let branch: string;
-    try { branch = b.defaultBranch || (await detectDefaultBranch(repoUrl, token)); } catch (e: any) { return bad(c, 400, `cannot access repository: ${e.message}`); }
-    let config = {};
-    if (b.config) { try { config = typeof b.config === 'string' ? parseProjectConfig(b.config) : b.config; } catch (e: any) { return bad(c, 400, e.message); } }
-    return c.json(store.createProject({ name, repoUrl, defaultBranch: branch, githubToken: token, config }), 201);
-  });
-  app.patch('/api/projects/:id', async (c) => {
-    const p = store.getProject(Number(c.req.param('id')));
-    if (!p) return bad(c, 404, 'no such project');
-    const b = await c.req.json().catch(() => ({}));
-    let config;
-    if (b.config !== undefined) { try { config = typeof b.config === 'string' ? parseProjectConfig(b.config) : b.config; } catch (e: any) { return bad(c, 400, e.message); } }
-    store.updateProject(p.id, { config, githubToken: b.githubToken, defaultBranch: b.defaultBranch });
-    return c.json(store.getProject(p.id));
-  });
-  app.delete('/api/projects/:id', (c) => {
-    const id = Number(c.req.param('id'));
-    if (store.listTasks(id).length) return bad(c, 409, 'delete the project tasks first');
-    store.deleteProject(id);
-    return c.json({ ok: true });
-  });
-
-  // ---- tasks
-  app.get('/api/tasks', (c) => {
-    const p = c.req.query('project');
-    return c.json(store.listTasks(p ? Number(p) : undefined));
-  });
-  app.post('/api/projects/:id/tasks', async (c) => {
-    const p = store.getProject(Number(c.req.param('id')));
-    if (!p) return bad(c, 404, 'no such project');
-    const b = await c.req.json().catch(() => ({}));
-    const prompt = String(b.prompt ?? '').trim();
-    if (!prompt) return bad(c, 400, 'prompt is required');
-    const baseBranch = String(b.baseBranch || p.defaultBranch);
-    let repoCfg = {};
-    try {
-      const text = await fetchRepoFile(p.repoUrl, baseBranch, 'bivouac.yml', store.getProjectToken(p.id));
-      if (text) repoCfg = parseProjectConfig(text);
-    } catch (e: any) { return bad(c, 400, e.message); }
-    const eff = mergeConfig(repoCfg, p.config);
-    const num = (v: unknown, d: number) => (v === undefined || v === null || v === '' ? d : Number(v));
-    const maxIterations = num(b.maxIterations, eff.budget?.max_iterations ?? 10);
-    const maxCostUsd = num(b.maxCostUsd, eff.budget?.max_cost_usd ?? 20);
-    if (![maxIterations, maxCostUsd].every((n) => Number.isFinite(n) && n > 0)) return bad(c, 400, 'budgets must be positive numbers');
-    const pub = !!b.publicPreview;
-    const previewPass = pub ? Buffer.from(crypto.getRandomValues(new Uint8Array(12))).toString('base64url') : undefined;
-    const task = store.createTask({
-      projectId: p.id, title: String(b.title || prompt.split('\n')[0]).slice(0, 80), prompt,
-      successCommand: String(b.successCommand || eff.success || 'true'), baseBranch, maxIterations, maxCostUsd,
-      maxTokens: b.maxTokens ? Number(b.maxTokens) : eff.budget?.max_tokens ?? null, publicPreview: pub, previewUser: pub ? 'preview' : undefined, previewPass,
-    }, (id) => `agent/t-${id}-${slugify(String(b.title || prompt), 30)}`);
-    mgr.enqueue(task.id);
-    return c.json({ ...store.getTask(task.id), ...(previewPass ? { previewAuth: { user: 'preview', password: previewPass } } : {}) }, 201);
-  });
-  const withTask = (fn: (c: Context, t: Task) => Promise<Response> | Response) => async (c: Context) => {
-    const t = store.getTask(Number(c.req.param('id')));
-    if (!t) return bad(c, 404, 'no such task');
-    try { return await fn(c, t); } catch (e: any) {
-      if (e.code === 'UNPUSHED') return bad(c, 409, e.message, { code: 'UNPUSHED', unpushed: e.unpushed });
-      return bad(c, 400, String(e.message ?? e));
-    }
-  };
-  app.get('/api/tasks/:id', withTask((c, t) => c.json({ ...t, pendingInstructions: store.pendingInstructionCount(t.id), active: mgr.isActive(t.id) })));
-  app.get('/api/tasks/:id/events', withTask((c, t) => c.json(store.listEvents(t.id, Number(c.req.query('after') ?? 0)))));
-  app.get('/api/tasks/:id/devlogs', withTask(async (c, t) => c.json({ text: await mgr.devLogs(t.id, Number(c.req.query('lines') ?? 200)) })));
-  app.post('/api/tasks/:id/stop', withTask(async (c, t) => { await mgr.stop(t.id); return c.json(store.getTask(t.id)); }));
-  app.post('/api/tasks/:id/resume', withTask(async (c, t) => { const b = await c.req.json().catch(() => ({})); await mgr.resume(t.id, b.text); return c.json(store.getTask(t.id)); }));
-  app.post('/api/tasks/:id/instruct', withTask(async (c, t) => {
-    const b = await c.req.json().catch(() => ({}));
-    const text = String(b.text ?? '').trim();
-    if (!text) return bad(c, 400, 'text is required');
-    return c.json(await mgr.instruct(t.id, text));
-  }));
-  app.patch('/api/tasks/:id', withTask(async (c, t) => {
-    const b = await c.req.json().catch(() => ({}));
-    store.patchTask(t.id, { maxCostUsd: b.maxCostUsd, maxIterations: b.maxIterations, maxTokens: b.maxTokens });
-    return c.json(store.getTask(t.id));
-  }));
-  app.post('/api/tasks/:id/push', withTask(async (c, t) => { await mgr.push(t.id); return c.json(store.getTask(t.id)); }));
-  app.post('/api/tasks/:id/pr', withTask(async (c, t) => { const url = await mgr.openPr(t.id); return c.json({ url }); }));
-  app.delete('/api/tasks/:id', withTask(async (c, t) => { await mgr.destroy(t.id, c.req.query('force') === '1'); return c.json({ ok: true }); }));
-
-  // ---- live updates (SSE). ?task=ID adds that task's events (replayed from ?after=ID / Last-Event-ID).
-  app.get('/api/stream', (c) => {
-    const taskId = c.req.query('task') ? Number(c.req.query('task')) : null;
-    const after = Number(c.req.header('last-event-id') ?? c.req.query('after') ?? 0);
-    return streamSSE(c, async (s) => {
-      let lastSent = after;
-      const queue: StoreMessage[] = [];
-      let wake: (() => void) | null = null;
-      const onMsg = (m: StoreMessage) => { queue.push(m); wake?.(); };
-      store.bus.on('msg', onMsg);
-      s.onAbort(() => { store.bus.off('msg', onMsg); wake?.(); });
-      try {
-        if (taskId) for (const e of store.listEvents(taskId, after)) { lastSent = e.id; await s.writeSSE({ event: 'event', id: String(e.id), data: JSON.stringify(e) }); }
-        await s.writeSSE({ event: 'ready', data: '{}' });
-        while (!s.aborted) {
-          while (queue.length) {
-            const m = queue.shift()!;
-            if (m.type === 'event') { if (m.event.taskId === taskId && m.event.id > lastSent) { lastSent = m.event.id; await s.writeSSE({ event: 'event', id: String(m.event.id), data: JSON.stringify(m.event) }); } }
-            else await s.writeSSE({ event: m.type, data: JSON.stringify(m.type === 'task' ? m.task : { projectId: m.projectId }) });
-          }
-          await new Promise<void>((r) => { wake = r; setTimeout(r, 15000); });
-          wake = null;
-          if (!queue.length && !s.aborted) await s.write(': ping\n\n');
-        }
-      } finally { store.bus.off('msg', onMsg); }
+  // ---- login / session
+  app.get('/api/session', (c) => {
+    const u = c.get('user');
+    return c.json({
+      user: u, version: VERSION, domain: cfg.domain, baseUrl: baseUrl(cfg), githubReady: ctx.gh.configured,
+      setupOpen: auth.setupOpen(), base: baseUrl(cfg), mcpUrl: `${baseUrl(cfg)}/mcp`,
     });
   });
+  app.post('/api/logout', (c) => {
+    const id = getCookie(c, sessionCookieName(ctx));
+    if (id) auth.deleteSession(id);
+    deleteCookie(c, sessionCookieName(ctx), { path: '/' });
+    return c.json({ ok: true });
+  });
 
-  // ---- dashboard (static, SPA fallback)
+  const callback = `${'${base}'}/auth/github/callback`;
+  void callback;
+  app.get('/auth/github/start', (c) => {
+    if (!ctx.gh.configured) return c.redirect('/login?error=github_not_connected');
+    const wait = ctx.limiter.hit('login:' + clientIp(c), 30, 60_000);
+    if (wait) return c.text(`Too many attempts. Try again in ${wait} seconds.`, 429);
+    const state = randomToken(24);
+    const next = c.req.query('next') ?? '/';
+    setCookie(c, 'bv_gh_state', JSON.stringify({ state, next: next.startsWith('/') && !next.startsWith('//') ? next : '/' }), { httpOnly: true, sameSite: 'Lax', secure: cfg.previewScheme === 'https', path: '/', maxAge: 600 });
+    return c.redirect(ctx.gh.authorizeUrl(`${baseUrl(cfg)}/auth/github/callback`, state));
+  });
+  app.get('/auth/github/callback', async (c) => {
+    const wait = ctx.limiter.hit('login:' + clientIp(c), 30, 60_000);
+    if (wait) return c.text(`Too many attempts. Try again in ${wait} seconds.`, 429);
+    let saved: { state: string; next: string } | null = null;
+    try { saved = JSON.parse(getCookie(c, 'bv_gh_state') ?? 'null'); } catch { /* ignore */ }
+    deleteCookie(c, 'bv_gh_state', { path: '/' });
+    if (!saved || saved.state !== c.req.query('state') || !c.req.query('code')) return c.redirect('/login?error=state');
+    let gu;
+    try { gu = await ctx.gh.exchangeUserCode(c.req.query('code')!, `${baseUrl(cfg)}/auth/github/callback`); } catch { return c.redirect('/login?error=github'); }
+    const settingUp = auth.checkSetupToken(cfg.secretKey, getCookie(c, 'bv_setup'));
+    if (settingUp) {
+      // the person who holds the setup link and connected GitHub becomes the administrator; the link is closed for good
+      auth.upsertUser({ githubId: gu.id, login: gu.login, name: gu.name, avatarUrl: gu.avatarUrl }, 'admin');
+      auth.closeSetup();
+      deleteCookie(c, 'bv_setup', { path: '/' });
+      auth.audit(gu.login, 'admin_connected', { githubId: gu.id });
+    } else if (!(await isAllowed(ctx, gu))) {
+      auth.audit(gu.login, 'login_refused', { githubId: gu.id });
+      return c.redirect('/login?error=not_allowed');
+    } else {
+      auth.upsertUser({ githubId: gu.id, login: gu.login, name: gu.name, avatarUrl: gu.avatarUrl });
+    }
+    setSessionCookie(ctx, c, auth.createSession(gu.id));
+    auth.audit(gu.login, 'login', { githubId: gu.id });
+    return c.redirect(settingUp ? '/setup?step=repos' : saved.next);
+  });
+
+  setupRoutes(app, ctx);
+
+  // ---- OAuth authorization server for MCP clients
+  const metaBase = () => baseUrl(cfg);
+  const protectedResource = (c: C) => c.json({ resource: `${metaBase()}/mcp`, authorization_servers: [metaBase()], bearer_methods_supported: ['header'], scopes_supported: ['mcp'], resource_name: 'bivouac' });
+  app.get('/.well-known/oauth-protected-resource', protectedResource);
+  app.get('/.well-known/oauth-protected-resource/mcp', protectedResource);
+  const asMeta = (c: C) => c.json({
+    issuer: metaBase(), authorization_endpoint: `${metaBase()}/oauth/authorize`, token_endpoint: `${metaBase()}/oauth/token`,
+    registration_endpoint: `${metaBase()}/oauth/register`, revocation_endpoint: `${metaBase()}/oauth/revoke`,
+    response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'], code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['none'], scopes_supported: ['mcp'],
+  });
+  app.get('/.well-known/oauth-authorization-server', asMeta);
+  app.get('/.well-known/oauth-authorization-server/mcp', asMeta);
+  app.get('/.well-known/openid-configuration', asMeta);
+
+  const oauthErr = (c: C, e: unknown) => {
+    if (e instanceof OAuthError) return c.json({ error: e.code, error_description: e.message }, e.status as 400);
+    throw e;
+  };
+  app.post('/oauth/register', async (c) => {
+    const wait = ctx.limiter.hit('register:' + clientIp(c), 20, 3600_000);
+    if (wait) return c.json({ error: 'temporarily_unavailable', error_description: `Too many registrations, retry in ${wait}s` }, 429);
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      const cl = oauth.registerClient(body);
+      auth.audit('mcp-client', 'client_registered', { name: cl.name, redirectUris: cl.redirectUris });
+      return c.json({
+        client_id: cl.clientId, client_name: cl.name, redirect_uris: cl.redirectUris, grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'],
+        token_endpoint_auth_method: 'none', client_id_issued_at: cl.createdAt,
+      }, 201);
+    } catch (e) { return oauthErr(c, e); }
+  });
+  // consent screen data and decision (the page itself is part of the dashboard app)
+  app.get('/api/oauth/authorize-info', (c) => {
+    const u = c.get('user');
+    if (!u) return c.json({ error: 'unauthorized' }, 401);
+    try {
+      const { client, redirectUri } = oauth.validateAuthorize(c.req.query() as Record<string, string>);
+      return c.json({ client: { name: client.name, id: client.clientId }, redirectHost: new URL(redirectUri).host, user: u.login, scope: 'mcp',
+        rights: ['See your projects and tasks', 'Create, stop and resume tasks', 'Create and revoke preview share links', 'Push branches and open pull requests'] });
+    } catch (e) { return oauthErr(c, e); }
+  });
+  app.post('/api/oauth/authorize', async (c) => {
+    const u = c.get('user');
+    if (!u) return c.json({ error: 'unauthorized' }, 401);
+    const p = (await c.req.json().catch(() => ({}))) as Record<string, string>;
+    try {
+      const { client, redirectUri } = oauth.validateAuthorize(p);
+      const dest = new URL(redirectUri);
+      if (p.approve === false as unknown) throw new Error('unreachable');
+      if (String(p.decision) !== 'approve') {
+        dest.searchParams.set('error', 'access_denied');
+        if (p.state) dest.searchParams.set('state', p.state);
+        auth.audit(u.login, 'mcp_client_denied', { client: client.name });
+        return c.json({ redirect: dest.toString() });
+      }
+      const code = oauth.issueCode({ clientId: client.clientId, githubId: u.githubId, redirectUri, codeChallenge: p.code_challenge, resource: p.resource });
+      dest.searchParams.set('code', code);
+      if (p.state) dest.searchParams.set('state', p.state);
+      auth.audit(u.login, 'mcp_client_authorized', { client: client.name });
+      return c.json({ redirect: dest.toString() });
+    } catch (e) { return oauthErr(c, e); }
+  });
+  app.post('/oauth/token', async (c) => {
+    const wait = ctx.limiter.hit('token:' + clientIp(c), 120, 60_000);
+    if (wait) return c.json({ error: 'temporarily_unavailable', error_description: `Retry in ${wait}s` }, 429);
+    const ct = c.req.header('content-type') ?? '';
+    const raw = ct.includes('json') ? await c.req.json().catch(() => ({})) : Object.fromEntries(new URLSearchParams(await c.req.text()));
+    const p = raw as Record<string, string>;
+    c.header('Cache-Control', 'no-store');
+    try {
+      if (p.grant_type === 'authorization_code') return c.json(oauth.exchangeCode(p).tokens);
+      if (p.grant_type === 'refresh_token') return c.json(oauth.refresh(p).tokens);
+      throw new OAuthError('unsupported_grant_type', 'grant_type must be authorization_code or refresh_token');
+    } catch (e) { return oauthErr(c, e); }
+  });
+  app.post('/oauth/revoke', async (c) => {
+    const ct = c.req.header('content-type') ?? '';
+    const p = (ct.includes('json') ? await c.req.json().catch(() => ({})) : Object.fromEntries(new URLSearchParams(await c.req.text()))) as Record<string, string>;
+    if (p.token) oauth.revokeByToken(p.token);
+    return c.body(null, 200);
+  });
+
+  // ---- MCP endpoint
+  app.all('/mcp', async (c) => {
+    const unauthorized = () => c.json({ error: 'unauthorized', error_description: 'Authorization required' }, 401, {
+      'WWW-Authenticate': `Bearer resource_metadata="${metaBase()}/.well-known/oauth-protected-resource/mcp"`,
+    });
+    const h = c.req.header('authorization');
+    const info = h?.toLowerCase().startsWith('bearer ') ? oauth.verifyAccessToken(h.slice(7).trim()) : null;
+    if (!info) return unauthorized();
+    const user = auth.getUser(info.githubId);
+    if (!user || !auth.isAllowedById(user.githubId)) return unauthorized();
+    const client = oauth.getClient(info.clientId);
+    return handleMcp(svc, { kind: 'mcp', label: `mcp:${client?.name ?? info.clientId}:${user.login}` }, c.req.raw);
+  });
+
+  apiRoutes(app, ctx);
+
+  // ---- dashboard (static files, SPA fallback)
   const dir = cfg.dashboardDir;
   if (dir && existsSync(dir)) {
-    app.use('/*', serveStatic({ root: path.relative(process.cwd(), dir) || '.' }));
-    app.get('*', (c) => c.html(readFileSync(path.join(dir, 'index.html'), 'utf8')));
+    const index = () => readFileSync(path.join(dir, 'index.html'), 'utf8');
+    app.use('/assets/*', serveStatic({ root: path.relative(process.cwd(), dir) || '.' }));
+    app.get('/favicon.svg', serveStatic({ root: path.relative(process.cwd(), dir) || '.' }));
+    app.get('*', (c) => {
+      if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/oauth/') || c.req.path.startsWith('/.well-known/')) return c.json({ error: 'not found' }, 404);
+      c.header('Cache-Control', 'no-store');
+      return c.html(index());
+    });
   }
   return app;
 }
+
+/** Is this GitHub account allowed in? By numeric id, or as a member of an allowed organisation / team. */
+export async function isAllowed(ctx: Ctx, gu: { id: number; login: string }): Promise<boolean> {
+  if (ctx.auth.isAllowedById(gu.id)) return true;
+  for (const e of ctx.auth.listAllowed()) {
+    try {
+      if (e.kind === 'org' && (await ctx.gh.isMemberOfOrg(gu.login, e.value))) return true;
+      if (e.kind === 'team') { const [org, team] = e.value.split('/'); if (await ctx.gh.isMemberOfTeam(gu.login, org, team)) return true; }
+    } catch { /* GitHub unreachable: stay closed */ }
+  }
+  return false;
+}
+
+/** Internal listener: Traefik's dynamic configuration and the preview forwardAuth. Never exposed through Traefik. */
+export function createInternalApp(ctx: Ctx) {
+  const app = new Hono();
+  app.get('/internal/health', (c) => c.json({ ok: true }));
+  app.get('/internal/traefik', (c) => {
+    const cfg = { ...ctx.cfg };
+    const conf = buildTraefikConfig(cfg, ctx.store.routeTasks());
+    const prev = ctx.store.getSetting('previous_domain');
+    if (prev && prev !== cfg.domain) {
+      const r = conf.http.routers['bivouac-web'];
+      r.rule = `Host(\`${cfg.domain}\`) || Host(\`${prev}\`)`;
+    }
+    return c.json(conf);
+  });
+  app.get('/internal/preview-auth', (c) => {
+    const host = (c.req.header('x-forwarded-host') ?? '').split(':')[0];
+    const uri = c.req.header('x-forwarded-uri') ?? '/';
+    const d = ctx.previews.decide(host, uri, c.req.header('cookie') ?? '');
+    if (d.kind === 'allow') {
+      // Traefik copies this header over the request's Cookie header: the preview cookie never reaches the app
+      return c.body(null, 200, { Cookie: d.cookieHeader });
+    }
+    if (d.kind === 'redirect') return c.body(null, 302, { Location: d.location, 'Set-Cookie': d.setCookie, 'Cache-Control': 'no-store' });
+    const dash = baseUrl(ctx.cfg);
+    const gone = d.reason === 'no_task';
+    const msg = gone ? 'This preview does not exist (anymore).' : d.reason === 'expired' ? 'This share link has expired or was revoked.' : 'This preview is private.';
+    const hint = gone ? 'The task may have been renamed or deleted. Ask the person who sent you the link for a new one.' : 'Ask the owner for a share link, or open the preview from your bivouac dashboard.';
+    return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access denied</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f9;color:#14181f}@media(prefers-color-scheme:dark){body{background:#0e1116;color:#e6e9ee}a{color:#7fb0ff}}main{max-width:26rem;padding:2rem;text-align:center}h1{font-size:1.25rem;margin:.5rem 0}p{margin:.5rem 0;opacity:.8}</style></head>
+<body><main><div style="font-size:2.5rem">🔒</div><h1>Access denied</h1><p>${msg}</p><p>${hint}</p><p><a href="${dash}">Open the dashboard</a></p></main></body></html>`, gone ? 404 : 403, { 'Cache-Control': 'no-store' });
+  });
+  return app;
+}
+
+export { randomBytes, matchRedirect };

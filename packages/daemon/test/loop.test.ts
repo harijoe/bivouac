@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { addTask, makeEnv, makeRemote } from './helpers.js';
+import { addTask, makeEnv, makeRemote, repoOf, taskDirOf } from './helpers.js';
 
 const OK = 'grep -q ok fake-output.txt';
 
@@ -24,7 +24,7 @@ describe('success loop', () => {
     const kinds = env.store.listEvents(t.id).map((e) => e.kind);
     expect(kinds).toContain('tool_use'); expect(kinds).toContain('check'); expect(kinds).toContain('result');
     // branch created from base and commit made by the fake agent
-    const repo = env.mgr.repoDir(r);
+    const repo = repoOf(env, r);
     expect(readFileSync(path.join(repo, 'fake-output.txt'), 'utf8')).toBe('ok\n');
   });
 
@@ -108,7 +108,7 @@ describe('success loop', () => {
     await new Promise((r) => setTimeout(r, 500));
     expect((await env.mgr.instruct(t.id, 'use tabs')).queued).toBe(true);
     await env.mgr.settled(t.id);
-    const prompts = readFileSync(path.join(env.mgr.repoDir(t), '.bivouac', 'fake-prompts.log'), 'utf8');
+    const prompts = readFileSync(path.join(repoOf(env, t), '.bivouac', 'fake-prompts.log'), 'utf8');
     expect(prompts).toMatch(/=== run 2 resume=\S+[\s\S]*- use tabs/);
     expect(env.store.pendingInstructionCount(t.id)).toBe(0);
   });
@@ -123,7 +123,7 @@ describe('success loop', () => {
     expect(env.store.getTask(b.id)!.status).toBe('succeeded');
     expect(env.store.getTask(a.id)!.iteration).toBe(1);
     expect(env.store.getTask(b.id)!.iteration).toBe(2);
-    expect(env.mgr.repoDir(a)).not.toBe(env.mgr.repoDir(b));
+    expect(repoOf(env, a)).not.toBe(repoOf(env, b));
     expect(env.store.getTask(a.id)!.branch).not.toBe(env.store.getTask(b.id)!.branch);
   });
 
@@ -148,7 +148,7 @@ describe('success loop', () => {
     expect(env.store.getTask(t.id)!.pushed).toBe(true);
     await env.mgr.destroy(t.id, false);
     expect(env.store.getTask(t.id)).toBeNull();
-    expect(existsSync(env.mgr.taskDir(t))).toBe(false);
+    expect(existsSync(taskDirOf(env, t))).toBe(false);
   });
 
   it('recover() marks interrupted tasks as stopped', () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { traefikLabels, previewUrl, previewHost } from '../src/labels.js';
+import { buildTraefikConfig, previewUrl, previewHost } from '../src/routes.js';
 import { encrypt, decrypt } from '../src/crypto.js';
 import { buildRetryPrompt, buildInitialPrompt } from '../src/prompt.js';
 import { parseMemory } from '../src/sandbox.js';
@@ -7,27 +7,37 @@ import { parseGithubRepo } from '../src/git.js';
 import { makeEnv } from './helpers.js';
 import { randomBytes } from 'node:crypto';
 
-const cfg = { domain: '100-64-1-2.sslip.io', previewScheme: 'http' as const, previewPort: 80, certResolver: null };
-describe('traefik labels', () => {
-  it('generates router, service and network labels', () => {
-    const l = traefikLabels(cfg, { taskId: 42, project: 'mon-app', port: 5173, network: 'bivouac-task-42' });
-    expect(l['traefik.http.routers.bivouac-t42.rule']).toBe('Host(`t-42.mon-app.100-64-1-2.sslip.io`)');
-    expect(l['traefik.http.services.bivouac-t42.loadbalancer.server.port']).toBe('5173');
-    expect(l['traefik.docker.network']).toBe('bivouac-task-42');
-    expect(l['traefik.http.routers.bivouac-t42.entrypoints']).toBe('web');
-    expect(Object.keys(l).some((k) => k.includes('tls'))).toBe(false);
+const cfg = { domain: '1-2-3-4.sslip.io', previewScheme: 'https' as const, previewPort: 443, certResolver: 'le', webHost: 'bivouac-web', namePrefix: 'bivouac', port: 3000, internalPort: 3001 };
+describe('traefik dynamic config', () => {
+  it('routes the dashboard and each task through forwardAuth', () => {
+    const c = buildTraefikConfig(cfg, [{ id: 42, name: 'login-page', project: 'mon-app', devPort: 5173 }, { id: 43, name: 'not-started', project: 'mon-app', devPort: null }]);
+    expect(c.http.routers['bivouac-web'].rule).toBe('Host(`1-2-3-4.sslip.io`)');
+    const r = c.http.routers['bivouac-t42'];
+    expect(r.rule).toBe('Host(`login-page.mon-app.1-2-3-4.sslip.io`)');
+    expect(r.middlewares).toEqual(['bivouac-preview-auth']);
+    expect(r.tls).toEqual({ certResolver: 'le' });
+    expect(c.http.services['bivouac-t42'].loadBalancer.servers[0].url).toBe('http://bivouac-task-42:5173');
+    expect(c.http.routers['bivouac-t43']).toBeUndefined();
+    const fa = c.http.middlewares['bivouac-preview-auth'].forwardAuth;
+    expect(fa.address).toBe('http://bivouac-web:3001/internal/preview-auth');
+    expect(fa.authResponseHeaders).toEqual(['Cookie']);
   });
-  it('adds TLS and basic auth', () => {
-    const l = traefikLabels({ ...cfg, previewScheme: 'https', certResolver: 'le' }, { taskId: 1, project: 'p', port: 80, network: 'n', publicAuth: { user: 'u', htpasswdHash: '{SHA}a$b' } });
-    expect(l['traefik.http.routers.bivouac-t1.tls.certresolver']).toBe('le');
-    expect(l['traefik.http.routers.bivouac-t1.entrypoints']).toBe('websecure');
-    expect(l['traefik.http.middlewares.bivouac-t1-auth.basicauth.users']).toBe('u:{SHA}a$$b');
-    expect(l['traefik.http.routers.bivouac-t1.middlewares']).toBe('bivouac-t1-auth');
+  it('a rename changes the route only', () => {
+    const a = buildTraefikConfig(cfg, [{ id: 1, name: 'one', project: 'p', devPort: 80 }]);
+    const b = buildTraefikConfig(cfg, [{ id: 1, name: 'two', project: 'p', devPort: 80 }]);
+    expect(a.http.routers['bivouac-t1'].rule).toContain('one.p.');
+    expect(b.http.routers['bivouac-t1'].rule).toContain('two.p.');
+    expect(a.http.services['bivouac-t1']).toEqual(b.http.services['bivouac-t1']);
+  });
+  it('plain http mode has no TLS', () => {
+    const c = buildTraefikConfig({ ...cfg, previewScheme: 'http' }, [{ id: 1, name: 'a', project: 'p', devPort: 80 }]);
+    expect(c.http.routers['bivouac-t1'].tls).toBeUndefined();
+    expect(c.http.routers['bivouac-t1'].entryPoints).toEqual(['web']);
   });
   it('builds URLs', () => {
-    expect(previewHost(cfg, 'mon-app', 42)).toBe('t-42.mon-app.100-64-1-2.sslip.io');
-    expect(previewUrl(cfg, 'a', 1)).toBe('http://t-1.a.100-64-1-2.sslip.io');
-    expect(previewUrl({ ...cfg, previewPort: 8080 }, 'a', 1)).toBe('http://t-1.a.100-64-1-2.sslip.io:8080');
+    expect(previewHost(cfg, 'mon-app', 'login')).toBe('login.mon-app.1-2-3-4.sslip.io');
+    expect(previewUrl(cfg, 'a', 'x')).toBe('https://x.a.1-2-3-4.sslip.io');
+    expect(previewUrl({ ...cfg, previewPort: 8443 }, 'a', 'x')).toBe('https://x.a.1-2-3-4.sslip.io:8443');
   });
 });
 describe('misc', () => {

@@ -1,14 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { LineSplitter, mergeConfig, parseProjectConfig, parseStreamLine, slugify, truncateOutput, type ProjectConfig, type Task, type Usage } from '@bivouac/shared';
 import type { DaemonConfig } from './config.js';
 import type { Store } from './db.js';
-import { chownTree, createPullRequest, git, gitOk, parseGithubRepo } from './git.js';
-import { previewUrl, traefikLabels } from './labels.js';
+import { createPullRequest, parseGithubRepo } from './git.js';
+import { previewUrl } from './routes.js';
 import { buildInitialPrompt, buildInstructionPrompt, buildRetryPrompt } from './prompt.js';
 import type { Sandbox } from './sandbox.js';
+import type { Project } from '@bivouac/shared';
 
 export type SandboxFactory = (task: Task) => Sandbox;
+/** Returns a credential for git / GitHub API calls on a project's repository (never given to a container). */
+export type RepoTokenProvider = (project: Project, access: 'read' | 'write') => Promise<string | null>;
 
 interface Active { abort: AbortController; stop: boolean; done: Promise<void>; sandbox: Sandbox }
 
@@ -20,14 +22,9 @@ const addUsage = (a: Usage, b: Usage): Usage => ({
 
 export class TaskManager {
   private active = new Map<number, Active>();
-  constructor(private store: Store, private cfg: DaemonConfig, private makeSandbox: SandboxFactory) {
-    store.previewUrlFor = (project, id) => previewUrl(cfg, project, id);
+  constructor(private store: Store, private cfg: DaemonConfig, private makeSandbox: SandboxFactory, private repoToken: RepoTokenProvider = async (p) => store.getProjectToken(p.id)) {
+    store.previewUrlFor = (project, name) => previewUrl(cfg, project, name);
   }
-
-  // ---- paths
-  taskDir(t: Pick<Task, 'projectName' | 'id'>) { return path.join(this.cfg.dataDir, 'projects', t.projectName, 'tasks', `t-${t.id}`); }
-  hostWorkspace(t: Pick<Task, 'projectName' | 'id'>) { return path.join(this.taskDir(t), 'workspace'); }
-  repoDir(t: Pick<Task, 'projectName' | 'id'>) { return path.join(this.hostWorkspace(t), 'repo'); }
 
   // ---- lifecycle
   /** Called on daemon boot: interrupted runs become `stopped`, queued ones restart. */
@@ -80,7 +77,7 @@ export class TaskManager {
     if (this.active.has(id) || t.status === 'queued') throw new Error(`task is ${t.status}`);
     if (instruction) this.store.addInstruction(id, instruction);
     const project = this.store.getProject(t.projectId)!;
-    const eff = mergeConfig(this.readRepoConfig(t), project.config);
+    const eff = mergeConfig(await this.readRepoConfig(t), project.config);
     this.store.patchTask(id, { maxIterations: t.iteration + (eff.budget?.max_iterations ?? 10), error: null });
     this.enqueue(id);
   }
@@ -102,31 +99,19 @@ export class TaskManager {
       if (n > 0 && !t.pushed) throw Object.assign(new Error(`branch ${t.branch} has ${n} unpushed commit(s)`), { code: 'UNPUSHED', unpushed: n });
     }
     await this.stop(id).catch(() => {});
-    const sb = this.makeSandbox(t);
-    // A non-root daemon (dev/CI) cannot delete files the container user created: let the container do it.
-    if (typeof process.getuid === 'function' && process.getuid() !== 0 && (await sb.isRunning())) {
-      await sb.exec(['sh', '-c', 'rm -rf /workspace/* /workspace/.[!.]* 2>/dev/null; true']).catch(() => {});
-    }
-    await sb.destroy();
-    try { rmSync(this.taskDir(t), { recursive: true, force: true }); } catch (e) {
-      // only possible when the daemon is not root (dev/CI): files owned by the container user
-      if (typeof process.getuid === 'function' && process.getuid() === 0) throw e;
-    }
+    await this.makeSandbox(t).destroy();
     this.store.deleteTask(id);
   }
 
   async unpushedCommits(t: Task): Promise<number> {
-    const repo = this.repoDir(t);
-    if (!existsSync(repo)) return 0;
-    const r = await git(['rev-list', '--count', 'HEAD', '--not', '--remotes'], { cwd: repo });
-    return r.code === 0 ? Number(r.stdout.trim()) : 0;
+    return this.makeSandbox(t).unpushed();
   }
 
   async push(id: number) {
     const t = this.store.getTask(id)!;
-    const token = this.store.getProjectToken(t.projectId);
     const project = this.store.getProject(t.projectId)!;
-    await gitOk(['push', '-u', 'origin', `${t.branch}:${t.branch}`], { cwd: this.repoDir(t), token, uid: this.cfg.taskUid });
+    const token = await this.repoToken(project, 'write');
+    await this.makeSandbox(t).push({ branch: t.branch, token });
     this.store.patchTask(id, { pushed: true });
     this.store.addEvent(id, 'system', { subtype: 'push', branch: t.branch, repo: project.repoUrl });
   }
@@ -134,13 +119,14 @@ export class TaskManager {
   async openPr(id: number) {
     const t = this.store.getTask(id)!;
     const project = this.store.getProject(t.projectId)!;
-    const token = this.store.getProjectToken(t.projectId);
     const gh = parseGithubRepo(project.repoUrl);
-    if (!gh || !token) throw new Error('opening a PR needs a GitHub repository URL and a project token');
+    if (!gh) throw new Error('Project is not connected to GitHub: only GitHub repositories support pull requests.');
+    const token = await this.repoToken(project, 'write');
+    if (!token) throw new Error('Project is not connected to GitHub: no credential is available for this repository.');
     if (!t.pushed) await this.push(id);
     const url = await createPullRequest({
       token, ...gh, head: t.branch, base: t.baseBranch, title: t.title,
-      body: `${t.prompt}\n\n---\nStatus: ${t.status} after ${t.iteration} iteration(s). Created by bivouac task t-${t.id}.`,
+      body: `${t.prompt}\n\n---\nStatus: ${t.status} after ${t.iteration} iteration(s). Created by bivouac task ${t.name}.`,
     });
     this.store.patchTask(id, { prUrl: url });
     this.store.addEvent(id, 'system', { subtype: 'pr', url });
@@ -150,17 +136,15 @@ export class TaskManager {
   async devLogs(id: number, lines = 200): Promise<string> {
     const t = this.store.getTask(id);
     if (!t) return '';
-    const f = path.join(this.hostWorkspace(t), '.bivouac', 'dev.log');
-    if (!existsSync(f)) return '';
-    const text = readFileSync(f, 'utf8');
-    return text.split('\n').slice(-lines).join('\n');
+    const text = await this.makeSandbox(t).readFile('.bivouac/dev.log').catch(() => null);
+    return text ? text.split('\n').slice(-lines).join('\n') : '';
   }
 
   // ---- helpers
-  private readRepoConfig(t: Task): ProjectConfig {
-    const f = path.join(this.repoDir(t), 'bivouac.yml');
-    if (!existsSync(f)) return {};
-    try { return parseProjectConfig(readFileSync(f, 'utf8')); } catch (e: any) {
+  private async readRepoConfig(t: Task): Promise<ProjectConfig> {
+    const text = await this.makeSandbox(t).readFile('repo/bivouac.yml').catch(() => null);
+    if (!text) return {};
+    try { return parseProjectConfig(text); } catch (e: any) {
       this.store.addEvent(t.id, 'system', { subtype: 'config_warning', message: `bivouac.yml ignored: ${e.message}` });
       return {};
     }
@@ -185,41 +169,29 @@ export class TaskManager {
   private async execute(id: number, a: Active) {
     let task = this.store.getTask(id)!;
     const project = this.store.getProject(task.projectId)!;
-    const token = this.store.getProjectToken(project.id);
     const sb = a.sandbox;
-    const hostWs = this.hostWorkspace(task);
-    const repo = this.repoDir(task);
     this.store.setStatus(id, 'starting');
 
-    // 1. clone on the host (token stays in the daemon) and create the task branch
-    if (!existsSync(path.join(repo, '.git'))) {
-      mkdirSync(hostWs, { recursive: true });
-      await gitOk(['clone', '--quiet', project.repoUrl, repo], { token });
-      await gitOk(['checkout', '-q', '-b', task.branch, `origin/${task.baseBranch}`], { cwd: repo });
-      await gitOk(['config', 'user.name', 'bivouac agent'], { cwd: repo });
-      await gitOk(['config', 'user.email', 'agent@bivouac.local'], { cwd: repo });
+    // 1. clone on the host (credentials stay out of the container) and create the task branch
+    const token = await this.repoToken(project, 'read');
+    if (await sb.prepareRepo({ repoUrl: project.repoUrl, token, branch: task.branch, base: task.baseBranch })) {
       this.store.addEvent(id, 'system', { subtype: 'clone', branch: task.branch, base: task.baseBranch });
     }
-    const eff = mergeConfig(this.readRepoConfig(task), project.config);
-    mkdirSync(path.join(hostWs, '.bivouac'), { recursive: true });
-    chownTree(hostWs, this.cfg.taskUid);
+    const eff = mergeConfig(await this.readRepoConfig(task), project.config);
     if (a.stop) return this.finishStopped(id);
 
-    // 2. container + preview
+    // 2. container + preview route (served by Traefik from the database, see routes.ts)
     const dev = eff.dev!;
-    const net = `${this.cfg.namePrefix}-task-${id}`;
-    const pa = task.publicPreview ? this.store.getPreviewAuth(id) : null;
+    this.store.patchTask(id, { devPort: dev.port });
     await sb.start({
-      taskId: id, project: project.name, hostWorkspace: hostWs, image: this.cfg.taskImage,
+      taskId: id, project: project.name,
       env: { BIVOUAC_TASK_ID: String(id), BIVOUAC_BRANCH: task.branch, ...(task.previewUrl ? { BIVOUAC_PREVIEW_URL: task.previewUrl } : {}) },
-      labels: traefikLabels(this.cfg, { taskId: id, project: project.name, port: dev.port, network: net, publicAuth: pa ? { user: pa.user, htpasswdHash: htpasswd(pa.pass) } : null }),
       cpus: eff.limits?.cpus, memory: eff.limits?.memory,
     });
     if (a.stop) return this.finishStopped(id);
 
     // 3. setup (once per workspace) and dev server
-    const marker = path.join(hostWs, '.bivouac', 'setup.done');
-    if (!existsSync(marker)) {
+    if ((await sb.readFile('.bivouac/setup.done')) === null) {
       if (eff.setup) {
         this.store.addEvent(id, 'system', { subtype: 'setup', command: eff.setup });
         const s = this.sink(id, 'setup');
@@ -228,12 +200,9 @@ export class TaskManager {
         if (a.stop) return this.finishStopped(id);
         if (code !== 0) throw new Error(`setup command failed with exit code ${code}`);
       }
-      mkdirSync(path.dirname(marker), { recursive: true });
-      writeFileSync(marker, new Date().toISOString());
+      await sb.writeFile('.bivouac/setup.done', new Date().toISOString());
     }
-    mkdirSync(path.join(hostWs, '.bivouac'), { recursive: true });
-    writeFileSync(path.join(hostWs, '.bivouac', 'dev.json'), JSON.stringify({ command: dev.command, port: dev.port, cwd: path.join(sb.ws, 'repo') }));
-    chownTree(path.join(hostWs, '.bivouac'), this.cfg.taskUid);
+    await sb.writeFile('.bivouac/dev.json', JSON.stringify({ command: dev.command, port: dev.port, cwd: path.join(sb.ws, 'repo') }));
 
     // 4. agent loop
     const successCmd = task.successCommand;
@@ -317,9 +286,4 @@ export class TaskManager {
   }
 }
 
-/** Traefik basicauth accepts {SHA}-style hashes: user:{SHA}base64(sha1). */
-import { createHash } from 'node:crypto';
-function htpasswd(pass: string): string {
-  return '{SHA}' + createHash('sha1').update(pass).digest('base64');
-}
 export { slugify };

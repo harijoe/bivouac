@@ -70,3 +70,11 @@ export function mergeConfig(...layers: (ProjectConfig | undefined)[]): ProjectCo
 export function slugify(s: string, max = 30): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, max).replace(/-+$/, '') || 'x';
 }
+
+/** Task names are DNS labels used in preview hostnames: lowercase letters, digits and dashes, 1 to 40 chars. */
+export const TASK_NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
+export function validateTaskName(name: unknown): string | null {
+  if (typeof name !== 'string' || !name) return 'Task name is required. Use lowercase letters, digits and dashes (1 to 40 characters), for example "login-page".';
+  if (!TASK_NAME_RE.test(name)) return `"${name}" is not a valid task name. Use only lowercase letters, digits and dashes (1 to 40 characters, not starting or ending with a dash), for example "login-page".`;
+  return null;
+}

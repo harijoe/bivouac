@@ -19,6 +19,9 @@ export interface Project {
   id: number;
   name: string; // slug, used in hostnames
   repoUrl: string;
+  /** `owner/repo` when the project comes from the GitHub App installation. */
+  githubRepo: string | null;
+  installationId: number | null;
   defaultBranch: string;
   hasGithubToken: boolean;
   config: import('./config.js').ProjectConfig;
@@ -29,6 +32,8 @@ export interface Task {
   id: number;
   projectId: number;
   projectName: string;
+  /** Unique slug inside the project; first label of the preview hostname. */
+  name: string;
   title: string;
   prompt: string;
   successCommand: string;
@@ -42,7 +47,7 @@ export interface Task {
   sessionId: string | null;
   usage: Usage;
   previewUrl: string | null;
-  publicPreview: boolean;
+  devPort: number | null;
   pushed: boolean;
   prUrl: string | null;
   error: string | null;
