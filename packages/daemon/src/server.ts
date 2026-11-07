@@ -250,7 +250,12 @@ export function createInternalApp(ctx: Ctx) {
       // Traefik copies this header over the request's Cookie header: the preview cookie never reaches the app
       return c.body(null, 200, { Cookie: d.cookieHeader });
     }
-    if (d.kind === 'redirect') return c.body(null, 302, { Location: d.location, 'Set-Cookie': d.setCookie, 'Cache-Control': 'no-store' });
+    if (d.kind === 'redirect') {
+      // Traefik resolves a relative Location against the auth service's own address: send an absolute URL on the public host.
+      const proto = c.req.header('x-forwarded-proto') ?? ctx.cfg.previewScheme;
+      const fullHost = c.req.header('x-forwarded-host') ?? host;
+      return c.body(null, 302, { Location: `${proto}://${fullHost}${d.location}`, 'Set-Cookie': d.setCookie, 'Cache-Control': 'no-store' });
+    }
     const dash = baseUrl(ctx.cfg);
     const gone = d.reason === 'no_task';
     const msg = gone ? 'This preview does not exist (anymore).' : d.reason === 'expired' ? 'This share link has expired or was revoked.' : 'This preview is private.';

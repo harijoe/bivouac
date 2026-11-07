@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ago, type ProjectWithTotals } from '../api';
-import { Button, CopyField, Details, ErrorNote, Spinner, useAsync, navigate } from '../ui';
+import { Button, Details, ErrorNote, Spinner, useAsync, navigate } from '../ui';
 import { ChatConnect, ClaudeConnect, claudeSummary } from './connect';
 
 interface SettingsData {
@@ -22,7 +22,7 @@ export function RepoPicker({ onAdded }: { onAdded: () => void }) {
   const [data, setData] = useState<{ configured: boolean; repos: { fullName: string; private: boolean; added: boolean }[]; installUrl: string | null } | null>(null);
   const a = useAsync();
   const load = useCallback(() => { void api('GET', '/api/github/repos').then(setData).catch((e) => a.setError(e.message)); }, [a]);
-  useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, []); // eslint-disable-line
   if (!data) return a.error ? <ErrorNote>{a.error}</ErrorNote> : <Spinner />;
   return (
     <div className="stack">
@@ -39,7 +39,7 @@ export function RepoPicker({ onAdded }: { onAdded: () => void }) {
   );
 }
 
-function Projects({ s, reload }: { s: SettingsData; reload: () => void }) {
+function Projects({ s }: { s: SettingsData }) {
   const [projects, setProjects] = useState<ProjectWithTotals[]>([]);
   const [tick, setTick] = useState(0);
   const [repoUrl, setRepoUrl] = useState(''); const [token, setToken] = useState('');
@@ -188,7 +188,7 @@ export function Settings() {
         {s.admin ? <ClaudeConnect status={s.claude} onChange={load} /> : <p className="muted">Ask an administrator to manage this.</p>}
         {s.admin && s.claude.connected && <Button variant="ghost" onClick={async () => { if (confirm('Disconnect Claude? Running tasks will fail.')) { await api('DELETE', '/api/claude'); load(); } }}>Disconnect</Button>}
       </Section>
-      <Projects s={s} reload={load} />
+      <Projects s={s} />
       <Section id="chat" title="Connect your chat"><ChatConnect mcpUrl={s.mcpUrl} /></Section>
       <Apps s={s} reload={load} />
       <People s={s} reload={load} />

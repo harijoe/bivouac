@@ -6,7 +6,7 @@ function setup() {
   const env = makeEnv();
   const t = addTask(env, makeRemote(), { prompt: 'x', name: 'login' });
   env.store.patchTask(t.id, { devPort: 5173 });
-  const auth = (host: string, uri = '/', cookie = '') => env.internal.request('/internal/preview-auth', { headers: { 'x-forwarded-host': host, 'x-forwarded-uri': uri, ...(cookie ? { cookie } : {}) } });
+  const auth = (host: string, uri = '/', cookie = '') => env.internal.request('/internal/preview-auth', { headers: { 'x-forwarded-host': host, 'x-forwarded-proto': 'https', 'x-forwarded-uri': uri, ...(cookie ? { cookie } : {}) } });
   return { env, t, auth };
 }
 const cookieOf = (r: Response) => (r.headers.get('set-cookie') ?? '').split(';')[0];
@@ -25,7 +25,7 @@ describe('preview access control (forwardAuth)', () => {
     const ticket = env.ctx.previews.createTicket(t.id);
     const r = await auth(HOST, `/dashboard?x=1&bv_ticket=${ticket}`);
     expect(r.status).toBe(302);
-    expect(r.headers.get('location')).toBe('/dashboard?x=1');
+    expect(r.headers.get('location')).toBe(`https://${HOST}/dashboard?x=1`);
     const sc = r.headers.get('set-cookie')!;
     expect(sc).toMatch(/^bv_preview=/); expect(sc).toMatch(/HttpOnly/); expect(sc).toMatch(/Secure/); expect(sc).toMatch(/SameSite=Lax/);
     expect(sc).not.toMatch(/Domain=/i);
@@ -59,7 +59,7 @@ describe('preview access control (forwardAuth)', () => {
     env.store.patchTask(t2.id, { devPort: 3000 });
     const s = env.ctx.previews.createShare(t.id, '1h');
     const entry = await auth(HOST, `/?bv_share=${s.token}`);
-    expect(entry.status).toBe(302); expect(entry.headers.get('location')).toBe('/');
+    expect(entry.status).toBe(302); expect(entry.headers.get('location')).toBe(`https://${HOST}/`);
     const cookie = cookieOf(entry);
     expect((await auth(HOST, '/page', cookie)).status).toBe(200);
     // the same link does not open another task's preview

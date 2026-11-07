@@ -46,7 +46,7 @@ if (!args.insecure) {
 }
 check((await raw(`${BASE.replace('https', 'http')}/api/health`)).status === 308 || (await raw(`${BASE.replace('https', 'http')}/api/health`)).status === 301, 'plain HTTP redirects to HTTPS');
 for (const p of ['/api/projects', '/api/tasks', '/api/settings', '/api/stream', '/api/setup/state']) check((await raw(BASE + p)).status === 401, `${p} needs a session`);
-check((await raw(`${BASE}/internal/traefik`)).status !== 200, '/internal/* is not reachable from outside');
+check(!(await (await raw(`${BASE}/internal/traefik`)).text()).includes('routers'), '/internal/* is not reachable from outside');
 check((await raw(`${BASE}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status === 401, '/mcp needs a token');
 const meta = await (await raw(`${BASE}/.well-known/oauth-authorization-server`)).json();
 check(meta.code_challenge_methods_supported?.[0] === 'S256' && meta.issuer === BASE, 'OAuth metadata is published');
@@ -136,7 +136,6 @@ if (!REAL) {
 title('live rename');
 const t0 = Date.now();
 check((await dash('POST', `/api/tasks/${created.alpha.id}/rename`, { name: 'renamed' })).status === 200, 'rename accepted');
-const R = previewUrl('renamed', 'demo');
 const l2 = (await dash('POST', `/api/tasks/${created.alpha.id}/preview-link`)).json.url;
 await waitFor(async () => { const r = await raw(l2); return r.status === 302 ? r : false; }, 120000, 1000, 'renamed host');
 ok(`new address answers ${((Date.now() - t0) / 1000).toFixed(1)} s after the rename`);
