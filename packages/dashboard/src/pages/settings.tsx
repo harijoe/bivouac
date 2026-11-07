@@ -22,7 +22,7 @@ export function RepoPicker({ onAdded }: { onAdded: () => void }) {
   const [data, setData] = useState<{ configured: boolean; repos: { fullName: string; private: boolean; added: boolean }[]; installUrl: string | null } | null>(null);
   const a = useAsync();
   const load = useCallback(() => { void api('GET', '/api/github/repos').then(setData).catch((e) => a.setError(e.message)); }, [a]);
-  useEffect(load, []); // eslint-disable-line
+  useEffect(load, []);
   if (!data) return a.error ? <ErrorNote>{a.error}</ErrorNote> : <Spinner />;
   return (
     <div className="stack">

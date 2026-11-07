@@ -208,7 +208,7 @@ describe('docker integration (real topology)', () => {
     const ownerLink = (await dash('POST', `/api/tasks/${a.id}/preview-link`)).json.url as string;
     const entry = await get(hostA, pathOf(ownerLink));
     expect(entry.status).toBe(302);
-    expect(String(entry.headers.location)).toBe(`http://${hostA}:${HTTP_PORT}/`); // absolute, on the public host, ticket gone
+    expect(String(entry.headers.location)).toBe(`http://${hostA}/`); // absolute, on the public host, ticket gone
     const cookieA = cookieOf(entry);
     expect(cookieA).toMatch(/^bv_preview=/);
     const page = await waitFor(async () => { const x = await get(hostA, '/', { cookie: cookieA }); return x.status === 200 && x.text.includes('<div id="root">') ? x : false; }, 240000, 2000);
