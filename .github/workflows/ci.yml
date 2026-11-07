@@ -82,36 +82,3 @@ jobs:
             ghcr.io/${{ steps.meta.outputs.repo }}-task:${{ github.ref_type == 'tag' && 'latest' || format('sha-{0}', github.sha) }}
           cache-from: type=gha,scope=task
           cache-to: type=gha,scope=task,mode=max
-  # The maintainer's automation token cannot read Actions results, so publish them to a branch it can read.
-  report:
-    runs-on: ubuntu-24.04
-    if: always() && github.event_name == 'push'
-    needs: [test, integration, images]
-    permissions: { contents: write }
-    steps:
-      - uses: actions/checkout@v4
-        with: { ref: ci-status, fetch-depth: 1 }
-        continue-on-error: true
-      - uses: actions/download-artifact@v4
-        continue-on-error: true
-        with: { name: integration-log, path: /tmp/artifacts }
-      - uses: actions/download-artifact@v4
-        continue-on-error: true
-        with: { name: test-log, path: /tmp/artifacts-test }
-      - name: Write status
-        env:
-          RESULT_TEST: ${{ needs.test.result }}
-          RESULT_INTEGRATION: ${{ needs.integration.result }}
-          RESULT_IMAGES: ${{ needs.images.result }}
-        run: |
-          set -e
-          if [ ! -d .git ]; then git init -q; git checkout -q -b ci-status; git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"; fi
-          mkdir -p status
-          printf '{"sha":"%s","ref":"%s","test":"%s","integration":"%s","images":"%s","run":"%s"}\n' "$GITHUB_SHA" "$GITHUB_REF" "$RESULT_TEST" "$RESULT_INTEGRATION" "$RESULT_IMAGES" "$GITHUB_RUN_ID" > "status/${GITHUB_SHA}.json"
-          cp "status/${GITHUB_SHA}.json" status/latest.json
-          rm -f status/integration.log status/test.log
-          [ -f /tmp/artifacts/integration.log ] && tail -c 60000 /tmp/artifacts/integration.log > status/integration.log || true
-          [ -f /tmp/artifacts-test/test.log ] && tail -c 30000 /tmp/artifacts-test/test.log > status/test.log || true
-          git config user.name ci; git config user.email ci@users.noreply.github.com
-          git add status; git commit -qm "ci status for ${GITHUB_SHA::7}"
-          git push origin HEAD:ci-status
