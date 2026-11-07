@@ -13,10 +13,13 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test
+      - name: Build, lint, typecheck, test
+        run: |
+          set -o pipefail
+          { pnpm build && pnpm lint && pnpm typecheck && pnpm test; } 2>&1 | tee test.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: test-log, path: test.log }
   integration:
     runs-on: ubuntu-24.04
     needs: test
@@ -92,6 +95,9 @@ jobs:
       - uses: actions/download-artifact@v4
         continue-on-error: true
         with: { name: integration-log, path: /tmp/artifacts }
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with: { name: test-log, path: /tmp/artifacts-test }
       - name: Write status
         env:
           RESULT_TEST: ${{ needs.test.result }}
@@ -103,7 +109,9 @@ jobs:
           mkdir -p status
           printf '{"sha":"%s","ref":"%s","test":"%s","integration":"%s","images":"%s","run":"%s"}\n' "$GITHUB_SHA" "$GITHUB_REF" "$RESULT_TEST" "$RESULT_INTEGRATION" "$RESULT_IMAGES" "$GITHUB_RUN_ID" > "status/${GITHUB_SHA}.json"
           cp "status/${GITHUB_SHA}.json" status/latest.json
+          rm -f status/integration.log status/test.log
           [ -f /tmp/artifacts/integration.log ] && tail -c 60000 /tmp/artifacts/integration.log > status/integration.log || true
+          [ -f /tmp/artifacts-test/test.log ] && tail -c 30000 /tmp/artifacts-test/test.log > status/test.log || true
           git config user.name ci; git config user.email ci@users.noreply.github.com
           git add status; git commit -qm "ci status for ${GITHUB_SHA::7}"
           git push origin HEAD:ci-status
