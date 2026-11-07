@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+// Fake `claude` CLI for tests: emits realistic stream-json (shape copied from a real capture),
+// edits a file and commits. Scenario is chosen with markers in the first prompt:
+//   FAKE_SCENARIO=succeed | fail-then-succeed | always-fail   (default: succeed)
+//   FAKE_COST=<usd per invocation>   FAKE_DELAY=<ms between events>   FAKE_CRASH=1 (exit 1 w/o result)
+// The scenario is persisted in .bivouac/fake-state.json so --resume invocations keep it.
+import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+
+const argv = process.argv.slice(2);
+const flag = (n) => { const i = argv.indexOf(n); return i >= 0 ? argv[i + 1] : undefined; };
+if (argv.includes('--version')) { console.log('0.0.0-fake (Claude Code)'); process.exit(0); }
+const prompt = flag('-p') ?? '';
+const resume = flag('--resume');
+const maxBudget = flag('--max-budget-usd') ? Number(flag('--max-budget-usd')) : undefined;
+const stateDir = '.bivouac';
+mkdirSync(stateDir, { recursive: true });
+const statePath = `${stateDir}/fake-state.json`;
+const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : { runs: 0, sessionId: randomUUID() };
+const mark = (k, d) => (prompt.match(new RegExp(`${k}=([\\w.-]+)`)) ?? [])[1] ?? d;
+if (!state.scenario) { state.scenario = mark('FAKE_SCENARIO', 'succeed'); state.cost = Number(mark('FAKE_COST', '0.01')); state.delay = Number(mark('FAKE_DELAY', '0')); state.crash = mark('FAKE_CRASH', '') === '1'; }
+state.runs += 1;
+const sessionId = resume || state.sessionId;
+writeFileSync(statePath, JSON.stringify(state));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const emit = async (o) => { console.log(JSON.stringify({ ...o, session_id: sessionId })); if (state.delay) await sleep(state.delay); };
+const usage = (i, o) => ({ input_tokens: i, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: o, service_tier: 'standard' });
+const msg = (content, o) => ({ type: 'assistant', message: { model: 'fake-model', id: 'msg_' + randomUUID().slice(0, 12), type: 'message', role: 'assistant', content, usage: usage(10, o) }, parent_tool_use_id: null, uuid: randomUUID() });
+
+const good = state.scenario === 'succeed' || (state.scenario === 'fail-then-succeed' && state.runs >= 2);
+const file = 'fake-output.txt';
+await emit({ type: 'system', subtype: 'init', cwd: process.cwd(), model: 'fake-model', tools: ['Read', 'Edit', 'Bash'], permissionMode: 'bypassPermissions' });
+await emit(msg([{ type: 'text', text: `Run #${state.runs}${resume ? ' (resumed)' : ''}: working on it. Prompt starts with: ${prompt.slice(0, 80).replace(/\n/g, ' ')}` }], 20));
+if (state.crash) { console.error('fake crash'); process.exit(1); }
+const toolId = 'toolu_' + randomUUID().slice(0, 12);
+await emit(msg([{ type: 'tool_use', id: toolId, name: 'Edit', input: { file_path: `${process.cwd()}/${file}`, new_string: good ? 'ok' : 'broken' } }], 30));
+writeFileSync(file, good ? 'ok\n' : 'broken\n');
+appendFileSync('fake-log.txt', `run ${state.runs}\n`);
+await emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: `Wrote ${file}` }] }, parent_tool_use_id: null, uuid: randomUUID() });
+try { execSync(`git add -A -- ${file} fake-log.txt && git -c user.name=fake -c user.email=fake@example.com commit -q -m "fake claude run ${state.runs}"`, { stdio: 'ignore' }); } catch { /* not a git repo or nothing to commit */ }
+await emit(msg([{ type: 'text', text: good ? 'Done: the feature works.' : 'I made a change but it may not be right.' }], 25));
+const over = maxBudget !== undefined && state.cost > maxBudget;
+await emit({
+  type: 'result', subtype: over ? 'error_max_budget_usd' : 'success', is_error: over, duration_ms: 1234, num_turns: 3,
+  result: good ? 'Done: the feature works.' : 'I made a change but it may not be right.',
+  stop_reason: 'end_turn', total_cost_usd: state.cost,
+  usage: { input_tokens: 30, cache_creation_input_tokens: 300, cache_read_input_tokens: 3000, output_tokens: 75 },
+  uuid: randomUUID(),
+});
