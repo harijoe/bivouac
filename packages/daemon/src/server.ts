@@ -3,11 +3,10 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import type { AppEnv, C, Ctx } from './context.js';
 import { clientIp } from './context.js';
 import { handleMcp } from './mcp.js';
-import { matchRedirect, OAuthError } from './oauth.js';
+import { OAuthError } from './oauth.js';
 import { randomToken } from './auth.js';
 import { baseUrl } from './config.js';
 import { apiRoutes } from './routes-api.js';
@@ -27,7 +26,7 @@ const CSP = [
 ].join('; ');
 
 export function createApp(ctx: Ctx) {
-  const { cfg, store, auth, oauth, svc } = ctx;
+  const { cfg, auth, oauth, svc } = ctx;
   const app = new Hono<AppEnv>();
 
   // ---- security headers, session lookup, CSRF guard
@@ -62,12 +61,10 @@ export function createApp(ctx: Ctx) {
   app.post('/api/logout', (c) => {
     const id = getCookie(c, sessionCookieName(ctx));
     if (id) auth.deleteSession(id);
-    deleteCookie(c, sessionCookieName(ctx), { path: '/' });
+    deleteCookie(c, sessionCookieName(ctx), { path: '/', secure: cfg.previewScheme === 'https' });
     return c.json({ ok: true });
   });
 
-  const callback = `${'${base}'}/auth/github/callback`;
-  void callback;
   app.get('/auth/github/start', (c) => {
     if (!ctx.gh.configured) return c.redirect('/login?error=github_not_connected');
     const wait = ctx.limiter.hit('login:' + clientIp(c), 30, 60_000);
@@ -155,7 +152,6 @@ export function createApp(ctx: Ctx) {
     try {
       const { client, redirectUri } = oauth.validateAuthorize(p);
       const dest = new URL(redirectUri);
-      if (p.approve === false as unknown) throw new Error('unreachable');
       if (String(p.decision) !== 'approve') {
         dest.searchParams.set('error', 'access_denied');
         if (p.state) dest.searchParams.set('state', p.state);
@@ -266,4 +262,3 @@ export function createInternalApp(ctx: Ctx) {
   return app;
 }
 
-export { randomBytes, matchRedirect };

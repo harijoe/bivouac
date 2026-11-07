@@ -22,7 +22,7 @@ const addUsage = (a: Usage, b: Usage): Usage => ({
 
 export class TaskManager {
   private active = new Map<number, Active>();
-  constructor(private store: Store, private cfg: DaemonConfig, private makeSandbox: SandboxFactory, private repoToken: RepoTokenProvider = async (p) => store.getProjectToken(p.id)) {
+  constructor(private store: Store, private cfg: DaemonConfig, private makeSandbox: SandboxFactory, private repoToken: RepoTokenProvider = async (p) => store.getProjectToken(p.id), private fetchImpl?: typeof fetch) {
     store.previewUrlFor = (project, name) => previewUrl(cfg, project, name);
   }
 
@@ -126,7 +126,7 @@ export class TaskManager {
     if (!t.pushed) await this.push(id);
     const url = await createPullRequest({
       token, ...gh, head: t.branch, base: t.baseBranch, title: t.title,
-      body: `${t.prompt}\n\n---\nStatus: ${t.status} after ${t.iteration} iteration(s). Created by bivouac task ${t.name}.`,
+      body: `${t.prompt}\n\n---\nStatus: ${t.status} after ${t.iteration} iteration(s). Created by bivouac task ${t.name}.`, fetchImpl: this.fetchImpl,
     });
     this.store.patchTask(id, { prUrl: url });
     this.store.addEvent(id, 'system', { subtype: 'pr', url });

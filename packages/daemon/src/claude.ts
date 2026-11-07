@@ -7,8 +7,11 @@ export function stripAnsi(s: string): string {
   return s
     // eslint-disable-next-line no-control-regex
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC sequences (hyperlinks, titles)
+    // The CLI's UI positions words with "move to column N" instead of printing spaces: keep them as spaces.
     // eslint-disable-next-line no-control-regex
-    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, '') // CSI sequences
+    .replace(/\x1b\[\d*[GC]/g, ' ')
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, '') // other CSI sequences
     // eslint-disable-next-line no-control-regex
     .replace(/\x1b[78=>]/g, '')
     .replace(/\r\n?/g, '\n');
@@ -47,7 +50,7 @@ export function loginState(raw: string, done: boolean, exitCode: number | null):
     const text = stripAnsi(raw).trim().split('\n').slice(-6).join(' ').slice(0, 300);
     return { phase: 'error', url: url ?? undefined, message: `Claude sign-in ended without a token (exit code ${exitCode}). ${text}` };
   }
-  if (url && /Paste code here/i.test(stripAnsi(raw))) return { phase: 'waiting_code', url };
+  if (url && /Paste\s*code\s*here/i.test(stripAnsi(raw))) return { phase: 'waiting_code', url };
   return { phase: 'starting' };
 }
 

@@ -26,9 +26,10 @@ export function buildContext(o: BuildOpts): Ctx {
   const gh = new GithubApp(store, o.fetchImpl ?? fetch);
   const previews = new Previews(store, cfg, cfg.secretKey);
   // The manager needs the service for repo tokens, the service needs the manager: tie the knot lazily.
-  let svc!: Service;
-  const mgr = new TaskManager(store, cfg, o.makeSandbox, (p, access) => svc.repoToken(p, access));
-  svc = new Service(store, cfg, mgr, auth, gh, previews);
+  const ref: { svc?: Service } = {};
+  const mgr = new TaskManager(store, cfg, o.makeSandbox, (p, access) => ref.svc!.repoToken(p, access), o.fetchImpl);
+  const svc = new Service(store, cfg, mgr, auth, gh, previews);
+  ref.svc = svc;
   const oauth = new OAuthServer(store, () => cfg.oauthRedirectAllow);
   return {
     cfg, store, mgr, svc, auth, gh, oauth, previews, limiter: new RateLimiter(), login: o.login ?? null,
