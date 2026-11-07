@@ -10,4 +10,4 @@
   (flags used: `-p --output-format stream-json --verbose --dangerously-skip-permissions`).
   Event types seen: system/init (session_id, model, tools), assistant (message.content[], message.usage), user (tool_result),
   rate_limit_event, result (total_cost_usd, usage, session_id, stop_reason, num_turns...).
-- Repo harijoe/bivouac is PRIVATE. GHCR packages inherit privacy; fresh VMs cannot pull anonymously (see PROGRESS.md BLOQUÉ).
+- Repo harijoe/bivouac is now public; GHCR packages public (anonymous pull verified).
