@@ -50,7 +50,7 @@ GW=$(SSHR "docker network inspect bivouac-edge -f '{{(index .IPAM.Config 0).Gate
 REL_URL="http://$GW:8099/releases"
 if [ "$MODE" = local ]; then
   say "STEP 3: upgrade to 0.3.0 over SSH with install.sh (images built on the VM); fake release server at $REL_URL"
-  SSHR "mkdir -p /srv/rel && echo '[]' > /srv/rel/releases && cd /srv/rel && nohup python3 -m http.server 8099 --bind 0.0.0.0 >/tmp/rel.log 2>&1 &"
+  SSHR "mkdir -p /srv/rel && echo '[]' > /srv/rel/releases && systemd-run --unit=bv-fake-releases --working-directory=/srv/rel python3 -m http.server 8099 --bind 0.0.0.0 >/dev/null 2>&1"
   SSHR "cd /root/src && BIVOUAC_SOURCE_DIR=/root/src BIVOUAC_VERSION=0.3.0 BIVOUAC_REGISTRY=bivouac-local BIVOUAC_RELEASES_URL=$REL_URL bash install.sh" 2>&1 | VMOUT
   [ "${PIPESTATUS[0]}" = 0 ] || fail "upgrade to 0.3.0 failed"
 else
