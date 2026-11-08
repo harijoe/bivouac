@@ -42,3 +42,35 @@ describe('helpers', () => {
   });
   it('slugifies', () => expect(slugify('Fix the Bug!! in /api')).toBe('fix-the-bug-in-api'));
 });
+
+import { resolvePorts, parseServices } from './index.js';
+
+describe('bivouac.yml: ports and services', () => {
+  it('parses named ports (first is primary) and keeps the legacy dev.port', () => {
+    const c = parseProjectConfig('dev:\n  command: pnpm dev\nports:\n  web: 5173\n  api: 3000\n');
+    expect(resolvePorts(c)).toEqual([{ name: 'web', port: 5173, primary: true }, { name: 'api', port: 3000, primary: false }]);
+    expect(resolvePorts(parseProjectConfig('dev: { command: x, port: 8080 }'))).toEqual([{ name: 'web', port: 8080, primary: true }]);
+  });
+  it('rejects bad ports', () => {
+    expect(() => parseProjectConfig('ports: { Web: 1 }')).toThrow(/port name/);
+    expect(() => parseProjectConfig('ports: { a: 0 }')).toThrow(/1 and 65535/);
+    expect(() => parseProjectConfig('ports: { a: 80, b: 80 }')).toThrow(/twice/);
+    expect(() => parseProjectConfig('ports: [80]')).toThrow(/mapping/);
+    expect(() => parseProjectConfig('dev: { command: x }')).toThrow(/dev.port/);
+  });
+  it('parses services', () => {
+    const c = parseProjectConfig('services:\n  postgres:\n    image: postgres:16\n    env: { POSTGRES_PASSWORD: dev, N: 5 }\n    volume: /var/lib/postgresql/data\n    memory: 1g\n    cpus: 0.5\n');
+    expect(c.services!.postgres).toEqual({ image: 'postgres:16', env: { POSTGRES_PASSWORD: 'dev', N: '5' }, volume: '/var/lib/postgresql/data', memory: '1g', cpus: 0.5 });
+  });
+  it('rejects dangerous or malformed services', () => {
+    expect(() => parseServices({ db: { image: 'postgres:16; rm -rf /' } })).toThrow(/image/);
+    expect(() => parseServices({ db: { image: '-v /:/host' } })).toThrow(/image/);
+    expect(() => parseServices({ db: { image: 'x', volume: '/a/../etc' } })).toThrow(/volume/);
+    expect(() => parseServices({ db: { image: 'x', volume: 'rel' } })).toThrow(/volume/);
+    expect(() => parseServices({ db: { image: 'x', env: { 'A B': '1' } } })).toThrow(/variable name/);
+    expect(() => parseServices({ web: { image: 'x' } })).toThrow(/reserved/);
+    expect(() => parseServices({ 'Bad_Name': { image: 'x' } })).toThrow(/service name/);
+    expect(() => parseServices({ db: { image: 'x', memory: '1 gig' } })).toThrow(/memory/);
+    expect(() => parseServices(Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`s${i}`, { image: 'x' }])))).toThrow(/at most/);
+  });
+});

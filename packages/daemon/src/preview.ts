@@ -96,17 +96,18 @@ export class Previews {
     return `${PREVIEW_COOKIE}=${this.sign(p)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax${this.cfg.previewScheme === 'https' ? '; Secure' : ''}`;
   }
 
-  /** Finds the task behind a preview host (`<name>.<project>.<domain>`). */
+  /** Finds the task behind a preview host: `<task>.<project>.<domain>` or `<port>.<task>.<project>.<domain>`. */
   taskForHost(host: string): { id: number; name: string; project: string } | null {
     const suffix = '.' + this.cfg.domain;
     if (!host.endsWith(suffix)) return null;
-    const rest = host.slice(0, -suffix.length);
-    const dot = rest.indexOf('.');
-    if (dot < 1) return null;
-    const name = rest.slice(0, dot), project = rest.slice(dot + 1);
+    const labels = host.slice(0, -suffix.length).split('.');
+    if (labels.length < 2 || labels.length > 3 || labels.some((l) => !l)) return null;
+    const [portName, name, project] = labels.length === 3 ? labels : [null, labels[0], labels[1]];
     const p = this.store.getProjectByName(project);
     const t = p ? this.store.getTaskByName(p.id, name) : null;
-    return t ? { id: t.id, name: t.name, project } : null;
+    if (!t) return null;
+    if (portName && !t.ports.some((x) => x.name === portName && !x.primary)) return null;
+    return { id: t.id, name: t.name, project };
   }
 
   /**

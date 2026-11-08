@@ -111,10 +111,11 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   app.post('/api/tasks/:id/push', run(async (c) => c.json(view(await svc.pushBranch(taskOf(c), actorOf(c))))));
   app.post('/api/tasks/:id/pr', run(async (c) => c.json({ url: await svc.openPr(taskOf(c), actorOf(c)) })));
   app.delete('/api/tasks/:id', run(async (c) => { await svc.deleteTask(taskOf(c), c.req.query('force') === '1', actorOf(c)); return c.json({ ok: true }); }));
-  app.post('/api/tasks/:id/preview-link', run((c) => {
+  app.post('/api/tasks/:id/preview-link', run(async (c) => {
     const t = taskOf(c);
     if (!t.devPort) throw new UserError('This task has no preview yet: it is still starting.', 'no_preview');
-    return c.json({ url: svc.ownerPreviewUrl(t) });
+    const b = await c.req.json().catch(() => ({}));
+    return c.json({ url: svc.ownerPreviewUrl(t, typeof b.port === 'string' ? b.port : undefined) });
   }));
   app.post('/api/tasks/:id/shares', run(async (c) => {
     const b = await c.req.json().catch(() => ({}));

@@ -10,7 +10,7 @@ import { randomBytes } from 'node:crypto';
 const cfg = { domain: '1-2-3-4.sslip.io', previewScheme: 'https' as const, previewPort: 443, certResolver: 'le', webHost: 'bivouac-web', namePrefix: 'bivouac', port: 3000, internalPort: 3001 };
 describe('traefik dynamic config', () => {
   it('routes the dashboard and each task through forwardAuth', () => {
-    const c = buildTraefikConfig(cfg, [{ id: 42, name: 'login-page', project: 'mon-app', devPort: 5173 }, { id: 43, name: 'not-started', project: 'mon-app', devPort: null }]);
+    const c = buildTraefikConfig(cfg, [{ id: 42, name: 'login-page', project: 'mon-app', ports: [{ name: 'web', port: 5173, primary: true }] }, { id: 43, name: 'not-started', project: 'mon-app', ports: [] }]);
     expect(c.http.routers['bivouac-web'].rule).toBe('Host(`1-2-3-4.sslip.io`)');
     const r = c.http.routers['bivouac-t42'];
     expect(r.rule).toBe('Host(`login-page.mon-app.1-2-3-4.sslip.io`)');
@@ -23,14 +23,14 @@ describe('traefik dynamic config', () => {
     expect(fa.authResponseHeaders).toEqual(['Cookie']);
   });
   it('a rename changes the route only', () => {
-    const a = buildTraefikConfig(cfg, [{ id: 1, name: 'one', project: 'p', devPort: 80 }]);
-    const b = buildTraefikConfig(cfg, [{ id: 1, name: 'two', project: 'p', devPort: 80 }]);
+    const a = buildTraefikConfig(cfg, [{ id: 1, name: 'one', project: 'p', ports: [{ name: 'web', port: 80, primary: true }] }]);
+    const b = buildTraefikConfig(cfg, [{ id: 1, name: 'two', project: 'p', ports: [{ name: 'web', port: 80, primary: true }] }]);
     expect(a.http.routers['bivouac-t1'].rule).toContain('one.p.');
     expect(b.http.routers['bivouac-t1'].rule).toContain('two.p.');
     expect(a.http.services['bivouac-t1']).toEqual(b.http.services['bivouac-t1']);
   });
   it('plain http mode has no TLS', () => {
-    const c = buildTraefikConfig({ ...cfg, previewScheme: 'http' }, [{ id: 1, name: 'a', project: 'p', devPort: 80 }]);
+    const c = buildTraefikConfig({ ...cfg, previewScheme: 'http' }, [{ id: 1, name: 'a', project: 'p', ports: [{ name: 'web', port: 80, primary: true }] }]);
     expect(c.http.routers['bivouac-t1'].tls).toBeUndefined();
     expect(c.http.routers['bivouac-t1'].entryPoints).toEqual(['web']);
   });
@@ -70,5 +70,16 @@ describe('misc', () => {
     expect(parseMemory('4g')).toBe(4 * 1024 ** 3); expect(parseMemory('512m')).toBe(512 * 1024 ** 2);
     expect(parseGithubRepo('https://github.com/a/b.git')).toEqual({ owner: 'a', repo: 'b' });
     expect(parseGithubRepo('https://example.com/a/b')).toBeNull();
+  });
+});
+
+describe('multi-port routes', () => {
+  const cfg2: any = { domain: 'x.example.com', previewScheme: 'https', certResolver: 'le', webHost: 'bivouac-web', namePrefix: 'bivouac', port: 3000, internalPort: 3001 };
+  it('primary port keeps the task URL, others get a port label; all behind forwardAuth', () => {
+    const c = buildTraefikConfig(cfg2, [{ id: 7, name: 'feat', project: 'app', ports: [{ name: 'web', port: 5173, primary: true }, { name: 'api', port: 3000, primary: false }] }]);
+    expect(c.http.routers['bivouac-t7'].rule).toBe('Host(`feat.app.x.example.com`)');
+    expect(c.http.routers['bivouac-t7-api'].rule).toBe('Host(`api.feat.app.x.example.com`)');
+    expect(c.http.routers['bivouac-t7-api'].middlewares).toEqual(['bivouac-preview-auth']);
+    expect(c.http.services['bivouac-t7-api'].loadBalancer.servers[0].url).toBe('http://bivouac-task-7:3000');
   });
 });

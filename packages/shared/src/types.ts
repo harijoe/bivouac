@@ -28,6 +28,9 @@ export interface Project {
   createdAt: string;
 }
 
+export interface TaskPort { name: string; port: number; primary: boolean; url: string }
+export interface TaskService { name: string; image: string }
+
 export interface Task {
   id: number;
   projectId: number;
@@ -48,6 +51,12 @@ export interface Task {
   usage: Usage;
   previewUrl: string | null;
   devPort: number | null;
+  /** Every exposed port with its URL (the primary one first). Empty until the task has started. */
+  ports: TaskPort[];
+  /** Sidecar services of the task. */
+  services: TaskService[];
+  /** Last problem found in bivouac.yml when it was re-read from the task branch (the last valid configuration stays in use). */
+  configError: string | null;
   pushed: boolean;
   prUrl: string | null;
   error: string | null;

@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import Dockerode from 'dockerode';
 import { randomBytes } from 'node:crypto';
+import { parseServices } from '@bivouac/shared';
 import type { DaemonConfig } from './config.js';
 import { safeEqual } from './crypto.js';
 import { DockerSandbox, type Sandbox } from './sandbox.js';
@@ -96,7 +97,7 @@ export function createExecutorApp(cfg: DaemonConfig, docker: Dockerode, login: L
   }));
   app.post('/sandboxes/:id/start', wrap(async (c) => {
     const b = await c.req.json();
-    await sb(c).start({ taskId: Number(c.req.param('id')), project: String(c.req.query('project')), env: cleanEnv(b.env), cpus: b.cpus, memory: b.memory });
+    await sb(c).start({ taskId: Number(c.req.param('id')), project: String(c.req.query('project')), env: cleanEnv(b.env), cpus: b.cpus, memory: b.memory, services: b.services === undefined ? {} : parseServices(b.services) });
     return c.json({ ok: true });
   }));
   app.post('/sandboxes/:id/exec', wrap(async (c) => {

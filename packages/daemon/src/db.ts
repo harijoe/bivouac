@@ -1,7 +1,8 @@
 import Database from 'better-sqlite3';
 import { EventEmitter } from 'node:events';
-import { emptyUsage, type EventKind, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Usage } from '@bivouac/shared';
+import { emptyUsage, type PortDef, type ServiceConfig, type EventKind, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Usage } from '@bivouac/shared';
 import { decrypt, encrypt } from './crypto.js';
+import type { RouteTask } from './routes.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -55,13 +56,16 @@ CREATE TABLE IF NOT EXISTS instructions (
   consumed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
 `;
 
+/** What a task exposes right now, from the last valid bivouac.yml. */
+export interface LiveConfig { ports: PortDef[]; services: Record<string, ServiceConfig>; error: string | null; repo?: ProjectConfig }
+
 export type StoreMessage = { type: 'task'; task: Task } | { type: 'event'; event: TaskEvent } | { type: 'project'; projectId: number };
 
 export class Store {
   readonly db: Database.Database;
   readonly bus = new EventEmitter();
   /** Resolves the preview URL for a task row (injected so the store stays config-free). */
-  previewUrlFor: (project: string, taskName: string) => string = () => '';
+  previewUrlFor: (project: string, taskName: string, portName?: string) => string = () => '';
 
   constructor(path: string, private key: Buffer) {
     this.db = new Database(path);
@@ -79,6 +83,7 @@ export class Store {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN name TEXT; UPDATE tasks SET name = 't-' || id WHERE name IS NULL;`);
     }
     if (!cols('tasks').includes('dev_port')) this.db.exec('ALTER TABLE tasks ADD COLUMN dev_port INTEGER');
+    if (!cols('tasks').includes('live_config')) this.db.exec('ALTER TABLE tasks ADD COLUMN live_config TEXT');
     this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS tasks_name ON tasks(project_id, name)');
     const pc = cols('projects');
     if (!pc.includes('github_repo')) this.db.exec('ALTER TABLE projects ADD COLUMN github_repo TEXT');
@@ -141,16 +146,23 @@ export class Store {
 
   // ---- tasks
   private taskFromRow(r: any): Task {
+    const live: LiveConfig = r.live_config ? JSON.parse(r.live_config) : { ports: [], services: {}, error: null };
+    const livePorts: PortDef[] = live.ports.length ? live.ports : r.dev_port ? [{ name: 'web', port: r.dev_port, primary: true }] : [];
+    const ports = livePorts.map((p) => ({ ...p, url: this.previewUrlFor(r.project_name, r.name, p.primary ? undefined : p.name) }));
     const usage: Usage = { inputTokens: r.in_tok, outputTokens: r.out_tok, cacheReadTokens: r.cache_read, cacheCreationTokens: r.cache_create, costUsd: r.cost_usd };
     return {
       id: r.id, projectId: r.project_id, projectName: r.project_name, name: r.name, title: r.title, prompt: r.prompt, successCommand: r.success_command,
       branch: r.branch, baseBranch: r.base_branch, status: r.status, iteration: r.iteration, maxIterations: r.max_iterations,
       maxCostUsd: r.max_cost_usd, maxTokens: r.max_tokens, sessionId: r.session_id, usage,
-      devPort: r.dev_port ?? null, previewUrl: this.previewUrlFor(r.project_name, r.name), pushed: !!r.pushed, prUrl: r.pr_url, error: r.error,
+      devPort: r.dev_port ?? null, ports, services: Object.entries(live.services).map(([name, v]) => ({ name, image: v.image })), configError: live.error, previewUrl: this.previewUrlFor(r.project_name, r.name), pushed: !!r.pushed, prUrl: r.pr_url, error: r.error,
       createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at,
     };
   }
   private static TASK_SELECT = 'SELECT t.*, p.name AS project_name FROM tasks t JOIN projects p ON p.id=t.project_id';
+  getLiveConfig(id: number): LiveConfig | null {
+    const r = this.db.prepare('SELECT live_config FROM tasks WHERE id=?').get(id) as any;
+    return r?.live_config ? JSON.parse(r.live_config) : null;
+  }
   taskNameTaken(projectId: number, name: string, exceptId?: number): boolean {
     return !!this.db.prepare('SELECT 1 FROM tasks WHERE project_id=? AND name=? AND id<>?').get(projectId, name, exceptId ?? -1);
   }
@@ -196,11 +208,11 @@ export class Store {
     this.addEvent(id, 'status', { status, error: error ?? null });
     return this.emitTask(id)!;
   }
-  patchTask(id: number, p: Partial<{ devPort: number; iteration: number; sessionId: string; pushed: boolean; prUrl: string; maxIterations: number; maxCostUsd: number; maxTokens: number | null; error: string | null }>) {
-    const m: Record<string, string> = { devPort: 'dev_port', iteration: 'iteration', sessionId: 'session_id', pushed: 'pushed', prUrl: 'pr_url', maxIterations: 'max_iterations', maxCostUsd: 'max_cost_usd', maxTokens: 'max_tokens', error: 'error' };
+  patchTask(id: number, p: Partial<{ devPort: number; liveConfig: LiveConfig; iteration: number; sessionId: string; pushed: boolean; prUrl: string; maxIterations: number; maxCostUsd: number; maxTokens: number | null; error: string | null }>) {
+    const m: Record<string, string> = { liveConfig: 'live_config', devPort: 'dev_port', iteration: 'iteration', sessionId: 'session_id', pushed: 'pushed', prUrl: 'pr_url', maxIterations: 'max_iterations', maxCostUsd: 'max_cost_usd', maxTokens: 'max_tokens', error: 'error' };
     for (const [k, v] of Object.entries(p)) {
       if (v === undefined) continue;
-      this.db.prepare(`UPDATE tasks SET ${m[k]}=? WHERE id=?`).run(typeof v === 'boolean' ? (v ? 1 : 0) : v, id);
+      this.db.prepare(`UPDATE tasks SET ${m[k]}=? WHERE id=?`).run(typeof v === 'boolean' ? (v ? 1 : 0) : typeof v === 'object' && v !== null ? JSON.stringify(v) : v, id);
     }
     return this.emitTask(id)!;
   }
@@ -248,9 +260,12 @@ export class Store {
   pendingInstructionCount(taskId: number): number {
     return (this.db.prepare('SELECT COUNT(*) n FROM instructions WHERE task_id=? AND consumed=0').get(taskId) as any).n;
   }
-  routeTasks(): { id: number; name: string; project: string; devPort: number | null }[] {
-    return (this.db.prepare('SELECT t.id, t.name, t.dev_port, p.name AS project FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.dev_port IS NOT NULL').all() as any[])
-      .map((r) => ({ id: r.id, name: r.name, project: r.project, devPort: r.dev_port }));
+  routeTasks(): RouteTask[] {
+    return (this.db.prepare('SELECT t.id, t.name, t.dev_port, t.live_config, p.name AS project FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.dev_port IS NOT NULL OR t.live_config IS NOT NULL').all() as any[])
+      .map((r) => {
+        const live: LiveConfig | null = r.live_config ? JSON.parse(r.live_config) : null;
+        return { id: r.id, name: r.name, project: r.project, ports: live?.ports.length ? live.ports : r.dev_port ? [{ name: 'web', port: r.dev_port, primary: true }] : [] };
+      });
   }
   nonTerminalTaskIds(): number[] {
     return (this.db.prepare(`SELECT id FROM tasks WHERE status IN ('starting','running','checking')`).all() as any[]).map((r) => r.id);

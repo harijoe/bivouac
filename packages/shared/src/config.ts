@@ -1,12 +1,42 @@
 import { parse } from 'yaml';
 
+/** A sidecar (database, cache…) started next to the task container, on the task's private network. */
+export interface ServiceConfig {
+  image: string;
+  env?: Record<string, string>;
+  /** Absolute path inside the service container, backed by a volume owned by the task. */
+  volume?: string;
+  cpus?: number;
+  memory?: string;
+}
+
 export interface ProjectConfig {
   image?: string;
   setup?: string;
-  dev?: { command: string; port: number };
+  dev?: { command: string; port?: number };
+  /** Named ports of the app, in order; the first one is the primary port (URL without a name prefix). */
+  ports?: Record<string, number>;
+  services?: Record<string, ServiceConfig>;
   success?: string;
   limits?: { cpus?: number; memory?: string };
   budget?: { max_iterations?: number; max_cost_usd?: number; max_tokens?: number };
+}
+
+export const MAX_PORTS = 6;
+export const MAX_SERVICES = 5;
+export const RESERVED_SERVICE_NAMES = ['task', 'localhost', 'traefik', 'web', 'executor'];
+const IMAGE_RE = /^[a-z0-9][a-z0-9._/-]{0,150}(:[A-Za-z0-9._-]{1,128})?(@sha256:[a-f0-9]{64})?$/;
+const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/;
+function validateLabel(v: string, what: string): string | null {
+  return LABEL_RE.test(v) ? null : `${what} "${v}" is invalid: use lowercase letters, digits and dashes (1 to 30 characters)`;
+}
+
+export interface PortDef { name: string; port: number; primary: boolean }
+/** The ports a task exposes. `ports` wins over the legacy `dev.port`, which is a single port named "web". */
+export function resolvePorts(cfg: ProjectConfig): PortDef[] {
+  if (cfg.ports && Object.keys(cfg.ports).length) return Object.entries(cfg.ports).map(([name, port], i) => ({ name, port, primary: i === 0 }));
+  return cfg.dev?.port ? [{ name: 'web', port: cfg.dev.port, primary: true }] : [];
 }
 
 export const DEFAULT_CONFIG: Required<Pick<ProjectConfig, 'success'>> & ProjectConfig = {
@@ -15,6 +45,46 @@ export const DEFAULT_CONFIG: Required<Pick<ProjectConfig, 'success'>> & ProjectC
   limits: { cpus: 2, memory: '4g' },
   budget: { max_iterations: 10, max_cost_usd: 20 },
 };
+
+/** Validates the `services` section (also used by the executor, which does not trust its caller). */
+export function parseServices(sv: unknown): Record<string, ServiceConfig> {
+  const num = (k: string, v: unknown) => {
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) throw new Error(`${k} must be a positive number`);
+    return v;
+  };
+  if (typeof sv !== 'object' || !sv || Array.isArray(sv)) throw new Error('services must be a mapping of name to service');
+  const entries = Object.entries(sv) as [string, any][];
+  if (entries.length > MAX_SERVICES) throw new Error(`services: at most ${MAX_SERVICES} services`);
+  const out: Record<string, ServiceConfig> = {};
+  for (const [name, s] of entries) {
+    const err = validateLabel(name, 'service name');
+    if (err) throw new Error(err);
+    if (RESERVED_SERVICE_NAMES.includes(name)) throw new Error(`service name "${name}" is reserved`);
+    if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error(`services.${name} must be a mapping`);
+    if (typeof s.image !== 'string' || !IMAGE_RE.test(s.image)) throw new Error(`services.${name}.image must be an image reference such as postgres:16`);
+    const svc: ServiceConfig = { image: s.image };
+    if (s.env !== undefined) {
+      if (typeof s.env !== 'object' || !s.env || Array.isArray(s.env)) throw new Error(`services.${name}.env must be a mapping`);
+      svc.env = {};
+      for (const [k, v] of Object.entries(s.env)) {
+        if (!ENV_KEY_RE.test(k)) throw new Error(`services.${name}.env: invalid variable name "${k}"`);
+        if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') throw new Error(`services.${name}.env.${k} must be a string`);
+        svc.env[k] = String(v);
+      }
+    }
+    if (s.volume !== undefined) {
+      if (typeof s.volume !== 'string' || !/^\/[A-Za-z0-9_./-]{1,200}$/.test(s.volume) || s.volume.split('/').includes('..')) throw new Error(`services.${name}.volume must be an absolute path inside the service, for example /var/lib/postgresql/data`);
+      svc.volume = s.volume;
+    }
+    if (s.cpus !== undefined) svc.cpus = num(`services.${name}.cpus`, s.cpus);
+    if (s.memory !== undefined) {
+      svc.memory = String(s.memory);
+      if (!/^\d+(\.\d+)?[kmgKMG]?$/.test(svc.memory)) throw new Error(`services.${name}.memory must look like 512m or 1g`);
+    }
+    out[name] = svc;
+  }
+  return out;
+}
 
 /** Parse and validate a bivouac.yml document. Throws on invalid input. */
 export function parseProjectConfig(text: string): ProjectConfig {
@@ -32,14 +102,32 @@ export function parseProjectConfig(text: string): ProjectConfig {
   if (raw.image !== undefined) cfg.image = str('image', raw.image);
   if (raw.setup !== undefined) cfg.setup = str('setup', raw.setup);
   if (raw.success !== undefined) cfg.success = str('success', raw.success);
+  if (raw.ports !== undefined) {
+    const p = raw.ports;
+    if (typeof p !== 'object' || !p || Array.isArray(p)) throw new Error('ports must be a mapping of name to port, for example { web: 5173, api: 3000 }');
+    const entries = Object.entries(p);
+    if (entries.length > MAX_PORTS) throw new Error(`ports: at most ${MAX_PORTS} ports`);
+    cfg.ports = {};
+    const seen = new Set<number>();
+    for (const [name, v] of entries) {
+      const err = validateLabel(name, 'port name');
+      if (err) throw new Error(err);
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 65535) throw new Error(`ports.${name} must be a port number between 1 and 65535`);
+      if (seen.has(v)) throw new Error(`ports.${name}: port ${v} is declared twice`);
+      seen.add(v);
+      cfg.ports[name] = v;
+    }
+  }
   if (raw.dev !== undefined) {
     const d = raw.dev;
     if (typeof d !== 'object' || !d) throw new Error('dev must be a mapping');
     const command = str('dev.command', d.command);
-    const port = num('dev.port', d.port);
-    if (!command || !port) throw new Error('dev.command and dev.port are required');
-    cfg.dev = { command, port };
+    const port = d.port === undefined ? undefined : num('dev.port', d.port);
+    if (!command) throw new Error('dev.command is required');
+    if (!port && !cfg.ports) throw new Error('dev.port is required (or declare ports: { web: 5173 })');
+    cfg.dev = port ? { command, port } : { command };
   }
+  if (raw.services !== undefined) cfg.services = parseServices(raw.services);
   if (raw.limits !== undefined) {
     cfg.limits = { cpus: num('limits.cpus', raw.limits.cpus), memory: raw.limits.memory === undefined ? undefined : String(raw.limits.memory) };
     if (cfg.limits.memory && !/^\d+(\.\d+)?[kmgKMG]?$/.test(cfg.limits.memory)) throw new Error('limits.memory must look like 512m or 4g');

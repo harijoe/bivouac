@@ -28,7 +28,7 @@ export class RemoteSandbox implements Sandbox {
   constructor(private c: ExecutorClient, private id: number, project: string) { this.q = `project=${encodeURIComponent(project)}`; }
   private p(path: string, extra = '') { return `/sandboxes/${this.id}/${path}?${this.q}${extra}`; }
   async prepareRepo(o: PrepareOpts) { return (await this.c.call('POST', this.p('prepare'), o)).cloned as boolean; }
-  async start(spec: SandboxSpec) { await this.c.call('POST', this.p('start'), { env: spec.env, cpus: spec.cpus, memory: spec.memory }); }
+  async start(spec: SandboxSpec) { await this.c.call('POST', this.p('start'), { env: spec.env, cpus: spec.cpus, memory: spec.memory, services: spec.services }); }
   async push(o: { branch: string; token: string | null }) { await this.c.call('POST', this.p('push'), o); }
   async unpushed() { return (await this.c.call('GET', this.p('unpushed'))).count as number; }
   async readFile(rel: string) { return (await this.c.call('GET', this.p('file', `&path=${encodeURIComponent(rel)}`))).content as string | null; }

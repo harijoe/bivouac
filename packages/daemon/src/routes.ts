@@ -1,20 +1,22 @@
+import type { PortDef } from '@bivouac/shared';
 import type { DaemonConfig } from './config.js';
 
 type HostCfg = Pick<DaemonConfig, 'domain' | 'previewScheme' | 'previewPort'>;
 
-export function previewHost(cfg: Pick<DaemonConfig, 'domain'>, project: string, taskName: string): string {
-  return `${taskName}.${project}.${cfg.domain}`;
+/** `<task>.<project>.<domain>` for the primary port, `<port>.<task>.<project>.<domain>` for the others. */
+export function previewHost(cfg: Pick<DaemonConfig, 'domain'>, project: string, taskName: string, portName?: string): string {
+  return `${portName ? portName + '.' : ''}${taskName}.${project}.${cfg.domain}`;
 }
 
 const portSuffix = (cfg: HostCfg) =>
   (cfg.previewScheme === 'http' && cfg.previewPort === 80) || (cfg.previewScheme === 'https' && cfg.previewPort === 443) ? '' : ':' + cfg.previewPort;
 
-export function previewUrl(cfg: HostCfg, project: string, taskName: string): string {
-  return `${cfg.previewScheme}://${previewHost(cfg, project, taskName)}${portSuffix(cfg)}`;
+export function previewUrl(cfg: HostCfg & Pick<DaemonConfig, 'domain'>, project: string, taskName: string, portName?: string): string {
+  return `${cfg.previewScheme}://${previewHost(cfg, project, taskName, portName)}${portSuffix(cfg)}`;
 }
 
 /** What the web service needs to know about a task to publish its route. */
-export interface RouteTask { id: number; name: string; project: string; devPort: number | null }
+export interface RouteTask { id: number; name: string; project: string; ports: PortDef[] }
 
 /**
  * Traefik v3 dynamic configuration served over the HTTP provider.
@@ -31,13 +33,14 @@ export function buildTraefikConfig(cfg: Pick<DaemonConfig, 'domain' | 'previewSc
     'bivouac-web': { loadBalancer: { servers: [{ url: `http://${cfg.webHost}:${cfg.port}` }] } },
   };
   for (const t of tasks) {
-    if (!t.devPort) continue;
-    const key = `bivouac-t${t.id}`;
-    routers[key] = {
-      rule: `Host(\`${previewHost(cfg, t.project, t.name)}\`)`, entryPoints: [entry], service: key, middlewares: ['bivouac-preview-auth'],
-      ...(tls ? { tls } : {}),
-    };
-    services[key] = { loadBalancer: { passHostHeader: true, servers: [{ url: `http://${cfg.namePrefix}-task-${t.id}:${t.devPort}` }] } };
+    for (const p of t.ports) {
+      const key = p.primary ? `bivouac-t${t.id}` : `bivouac-t${t.id}-${p.name}`;
+      routers[key] = {
+        rule: `Host(\`${previewHost(cfg, t.project, t.name, p.primary ? undefined : p.name)}\`)`, entryPoints: [entry], service: key, middlewares: ['bivouac-preview-auth'],
+        ...(tls ? { tls } : {}),
+      };
+      services[key] = { loadBalancer: { passHostHeader: true, servers: [{ url: `http://${cfg.namePrefix}-task-${t.id}:${p.port}` }] } };
+    }
   }
   return {
     http: {

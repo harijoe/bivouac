@@ -20,6 +20,10 @@ export interface TaskSummary {
   id: number; name: string; project: string; title: string; status: string; iteration: number; maxIterations: number;
   costUsd: number; maxCostUsd: number; tokens: number; previewUrl: string | null; dashboardUrl: string; prUrl: string | null; pushed: boolean;
   branch: string; error: string | null; createdAt: string; finishedAt: string | null;
+  /** Every exposed port with its URL (the main one first). */
+  urls: { name: string; port: number; main: boolean; url: string }[];
+  services: { name: string; image: string }[];
+  configError: string | null;
 }
 
 /** Everything the dashboard and the MCP server can do. One place for validation, messages and the audit trail. */
@@ -98,6 +102,7 @@ export class Service {
       id: t.id, name: t.name, project: t.projectName, title: t.title, status: t.status, iteration: t.iteration, maxIterations: t.maxIterations,
       costUsd: t.usage.costUsd, maxCostUsd: t.maxCostUsd, tokens: t.usage.inputTokens + t.usage.outputTokens + t.usage.cacheCreationTokens,
       previewUrl: t.previewUrl, dashboardUrl: this.taskUrl(t), prUrl: t.prUrl, pushed: t.pushed, branch: t.branch, error: t.error, createdAt: t.createdAt, finishedAt: t.finishedAt,
+      urls: t.ports.map((p) => ({ name: p.name, port: p.port, main: p.primary, url: p.url })), services: t.services, configError: t.configError,
     };
   }
   resolveTask(projectRef: string | number | undefined, taskRef: string | number): Task {
@@ -205,17 +210,21 @@ export class Service {
     if (!t.previewUrl) throw new UserError('This task has no preview yet.', 'no_preview');
     const s = this.previews.createShare(t.id, duration);
     this.auth.audit(actor.label, 'share_created', { task: t.name, duration });
-    return { id: s.id, url: this.shareUrl(t, s.token), expiresAt: s.expiresAt };
+    return { id: s.id, url: this.shareUrl(t, s.token), urls: this.shareUrls(t, s.token), expiresAt: s.expiresAt };
   }
   shareUrl(t: Task, token: string) { return `${t.previewUrl}/?bv_share=${token}`; }
+  /** One link per exposed port: a share link opens every port of the task. */
+  shareUrls(t: Task, token: string) { return t.ports.map((p) => ({ name: p.name, url: `${p.url}/?bv_share=${token}` })); }
   revokeShareLink(t: Task, id: number, actor: Actor) {
     const s = this.previews.getShare(id);
     if (!s || s.taskId !== t.id) throw new UserError(`No share link ${id} on this task. Use get_task to see its share links.`, 'unknown_share', 404);
     this.previews.revokeShare(id);
     this.auth.audit(actor.label, 'share_revoked', { task: t.name, id });
   }
-  ownerPreviewUrl(t: Task) {
-    return `${t.previewUrl}/?bv_ticket=${this.previews.createTicket(t.id)}`;
+  ownerPreviewUrl(t: Task, portName?: string) {
+    const port = portName ? t.ports.find((p) => p.name === portName) : t.ports.find((p) => p.primary);
+    if (portName && !port) throw new UserError(`This task has no port "${portName}". Available: ${t.ports.map((p) => p.name).join(', ')}.`, 'unknown_port', 404);
+    return `${port?.url ?? t.previewUrl}/?bv_ticket=${this.previews.createTicket(t.id)}`;
   }
 
   /** What an assistant needs to report on a task: the status plus the last things the agent said. */
@@ -229,7 +238,7 @@ export class Service {
       pendingInstructions: this.store.pendingInstructionCount(t.id),
       lastMessages: messages,
       lastCheck: lastCheck ? { command: lastCheck.data.command, exitCode: lastCheck.data.exitCode, output: String(lastCheck.data.output ?? '').slice(-1200) } : null,
-      shareLinks: this.previews.listShares(t.id).filter((s) => s.active).map((s) => ({ id: s.id, url: this.shareUrl(t, this.previews.shareToken(s.id) ?? ''), expiresAt: s.expiresAt ? new Date(s.expiresAt * 1000).toISOString() : null })),
+      shareLinks: this.previews.listShares(t.id).filter((s) => s.active).map((s) => ({ id: s.id, url: this.shareUrl(t, this.previews.shareToken(s.id) ?? ''), urls: this.shareUrls(t, this.previews.shareToken(s.id) ?? ''), expiresAt: s.expiresAt ? new Date(s.expiresAt * 1000).toISOString() : null })),
     };
   }
 }

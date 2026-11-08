@@ -1,10 +1,10 @@
 import path from 'node:path';
-import { LineSplitter, mergeConfig, parseProjectConfig, parseStreamLine, slugify, truncateOutput, type ProjectConfig, type Task, type Usage } from '@bivouac/shared';
+import { LineSplitter, mergeConfig, parseProjectConfig, parseStreamLine, resolvePorts, slugify, truncateOutput, type ProjectConfig, type Task, type Usage } from '@bivouac/shared';
 import type { DaemonConfig } from './config.js';
 import type { Store } from './db.js';
 import { createPullRequest, parseGithubRepo } from './git.js';
 import { previewUrl } from './routes.js';
-import { buildInitialPrompt, buildInstructionPrompt, buildRetryPrompt } from './prompt.js';
+import { buildInitialPrompt, buildInstructionPrompt, buildRetryPrompt, describeEnvironment } from './prompt.js';
 import type { Sandbox } from './sandbox.js';
 import type { Project } from '@bivouac/shared';
 
@@ -23,7 +23,7 @@ const addUsage = (a: Usage, b: Usage): Usage => ({
 export class TaskManager {
   private active = new Map<number, Active>();
   constructor(private store: Store, private cfg: DaemonConfig, private makeSandbox: SandboxFactory, private repoToken: RepoTokenProvider = async (p) => store.getProjectToken(p.id), private fetchImpl?: typeof fetch) {
-    store.previewUrlFor = (project, name) => previewUrl(cfg, project, name);
+    store.previewUrlFor = (project, name, portName) => previewUrl(cfg, project, name, portName);
   }
 
   // ---- lifecycle
@@ -149,6 +149,27 @@ export class TaskManager {
       return {};
     }
   }
+  /**
+   * Reads bivouac.yml from the task's working copy and publishes the ports and services it declares.
+   * An invalid file never interrupts the task: the last valid configuration stays in use and the error is reported.
+   */
+  private async loadConfig(t: Task, project: Project, sb: Sandbox, announce: boolean): Promise<ProjectConfig> {
+    const prev = this.store.getLiveConfig(t.id);
+    const text = await sb.readFile('repo/bivouac.yml').catch(() => null);
+    let repo: ProjectConfig = prev?.repo ?? {};
+    let error: string | null = null;
+    if (text === null) repo = {};
+    else try { repo = parseProjectConfig(text); } catch (e: any) { error = String(e?.message ?? e); }
+    const eff = mergeConfig(repo, project.config);
+    const ports = resolvePorts(eff);
+    const live = { ports, services: eff.services ?? {}, error, repo };
+    if (announce && error && error !== prev?.error) this.store.addEvent(t.id, 'system', { subtype: 'config_warning', message: `bivouac.yml is invalid, the previous configuration is kept: ${error}` });
+    if (announce && !error && prev && (JSON.stringify(prev.ports) !== JSON.stringify(ports) || JSON.stringify(prev.services) !== JSON.stringify(live.services))) {
+      this.store.addEvent(t.id, 'system', { subtype: 'config_changed', ports: ports.map((p) => p.name), services: Object.keys(live.services) });
+    }
+    this.store.patchTask(t.id, { liveConfig: live, ...(ports[0] ? { devPort: ports[0].port } : {}) });
+    return eff;
+  }
   private authEnv(): Record<string, string> {
     const oauth = this.store.getSecretSetting('claude_oauth_token') ?? this.cfg.oauthToken;
     const key = this.store.getSecretSetting('anthropic_api_key') ?? this.cfg.apiKey;
@@ -177,17 +198,17 @@ export class TaskManager {
     if (await sb.prepareRepo({ repoUrl: project.repoUrl, token, branch: task.branch, base: task.baseBranch })) {
       this.store.addEvent(id, 'system', { subtype: 'clone', branch: task.branch, base: task.baseBranch });
     }
-    const eff = mergeConfig(await this.readRepoConfig(task), project.config);
+    let eff = await this.loadConfig(task, project, sb, false);
     if (a.stop) return this.finishStopped(id);
 
-    // 2. container + preview route (served by Traefik from the database, see routes.ts)
-    const dev = eff.dev!;
-    this.store.patchTask(id, { devPort: dev.port });
-    await sb.start({
+    // 2. container, sidecars and preview routes (served by Traefik from the database, see routes.ts)
+    const startSandbox = () => sb.start({
       taskId: id, project: project.name,
       env: { BIVOUAC_TASK_ID: String(id), BIVOUAC_BRANCH: task.branch, ...(task.previewUrl ? { BIVOUAC_PREVIEW_URL: task.previewUrl } : {}) },
-      cpus: eff.limits?.cpus, memory: eff.limits?.memory,
+      cpus: eff.limits?.cpus, memory: eff.limits?.memory, services: eff.services ?? {},
     });
+    await startSandbox();
+    let servicesKey = JSON.stringify(eff.services ?? {});
     if (a.stop) return this.finishStopped(id);
 
     // 3. setup (once per workspace) and dev server
@@ -202,7 +223,14 @@ export class TaskManager {
       }
       await sb.writeFile('.bivouac/setup.done', new Date().toISOString());
     }
-    await sb.writeFile('.bivouac/dev.json', JSON.stringify({ command: dev.command, port: dev.port, cwd: path.join(sb.ws, 'repo') }));
+    let devKey = '';
+    const writeDev = async () => {
+      const d = { command: eff.dev!.command, port: resolvePorts(eff)[0]?.port ?? 0, cwd: path.join(sb.ws, 'repo') };
+      const key = JSON.stringify(d);
+      if (key !== devKey) { await sb.writeFile('.bivouac/dev.json', key); devKey = key; }
+    };
+    await writeDev();
+    const dev = eff.dev!;
 
     // 4. agent loop
     const successCmd = task.successCommand;
@@ -214,15 +242,20 @@ export class TaskManager {
       if (remaining <= 0.0001 || (task.maxTokens && tokensOf(task.usage) >= task.maxTokens)) return void this.store.setStatus(id, 'budget_exceeded');
       const iteration = task.iteration + 1;
       this.store.patchTask(id, { iteration });
+      // the agent may have edited bivouac.yml: new ports and services take effect now
+      eff = await this.loadConfig(task, project, sb, true);
+      if (JSON.stringify(eff.services ?? {}) !== servicesKey) { servicesKey = JSON.stringify(eff.services ?? {}); await startSandbox(); }
+      await writeDev();
+      const env = describeEnvironment({ ports: this.store.getTask(id)!.ports, services: Object.entries(eff.services ?? {}).map(([name, v]) => ({ name, image: v.image })), configError: this.store.getTask(id)!.configError });
       const instructions = this.store.takeInstructions(id);
       let prompt: string;
       if (!task.sessionId) {
-        prompt = buildInitialPrompt({ prompt: task.prompt, branch: task.branch, baseBranch: task.baseBranch, previewUrl: task.previewUrl, devCommand: dev.command, devLogPath: path.join(sb.ws, '.bivouac', 'dev.log'), successCommand: successCmd, iteration, maxIterations: task.maxIterations });
+        prompt = buildInitialPrompt({ ports: this.store.getTask(id)!.ports, services: Object.entries(eff.services ?? {}).map(([name, v]) => ({ name, image: v.image })), configError: this.store.getTask(id)!.configError, prompt: task.prompt, branch: task.branch, baseBranch: task.baseBranch, previewUrl: task.previewUrl, devCommand: dev.command, devLogPath: path.join(sb.ws, '.bivouac', 'dev.log'), successCommand: successCmd, iteration, maxIterations: task.maxIterations });
         if (instructions.length) prompt += '\n\nAdditional instructions from the user:\n' + instructions.map((i) => `- ${i}`).join('\n');
       } else if (failure) {
-        prompt = buildRetryPrompt({ checkOutput: failure.output, exitCode: failure.exitCode, successCommand: successCmd, instructions, iteration, maxIterations: task.maxIterations });
+        prompt = buildRetryPrompt({ checkOutput: failure.output, exitCode: failure.exitCode, successCommand: successCmd, instructions, iteration, maxIterations: task.maxIterations, env });
       } else {
-        prompt = instructions.length ? buildInstructionPrompt(instructions) : `Continue working on the task. Make sure \`${successCmd}\` passes.`;
+        prompt = instructions.length ? buildInstructionPrompt(instructions, env) : `Continue working on the task. Make sure \`${successCmd}\` passes.${env.length ? '\n' + env.join('\n') : ''}`;
       }
       this.store.setStatus(id, 'running');
       const run = await this.runClaude(id, a, sb, prompt, task, remaining, iteration);

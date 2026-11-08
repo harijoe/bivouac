@@ -4,6 +4,7 @@ import { chownSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
+import type { ServiceConfig } from '@bivouac/shared';
 import { chownTree, git, gitOk } from './git.js';
 
 export interface SandboxSpec {
@@ -12,6 +13,8 @@ export interface SandboxSpec {
   env: Record<string, string>;
   cpus?: number;
   memory?: string;
+  /** Sidecars to run next to the task. Services missing from this map are removed. */
+  services?: Record<string, ServiceConfig>;
 }
 export interface PrepareOpts { repoUrl: string; token: string | null; branch: string; base: string }
 export interface ExecOpts {
@@ -123,9 +126,20 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
     try { chownSync(this.hostWs, this.opts.uid, this.opts.uid); } catch { /* not root (tests) */ }
     const labels = { 'bivouac.managed': 'true', 'bivouac.task': String(spec.taskId) };
     // Fresh per-task network; Traefik joins it so previews are routed without tasks seeing each other.
-    try { await this.docker.getNetwork(this.name).inspect(); } catch {
-      await this.docker.createNetwork({ Name: this.name, Labels: { 'bivouac.managed': 'true' } });
+    // The bridge has a predictable name (bvt<id>) so the host firewall (firewall.sh) can cut its access to the host.
+    const bridge = `bvt${spec.taskId}`;
+    let net = await this.docker.getNetwork(this.name).inspect().catch(() => null);
+    if (net && net.Options?.['com.docker.network.bridge.name'] !== bridge) {
+      // created by an older version: recreate it so that the firewall covers it
+      await this.removeContainers();
+      await this.docker.getNetwork(this.name).disconnect({ Container: this.opts.traefikContainer, Force: true }).catch(() => {});
+      await this.docker.getNetwork(this.name).remove().catch(() => {});
+      net = null;
     }
+    if (!net) {
+      await this.docker.createNetwork({ Name: this.name, Labels: { 'bivouac.managed': 'true' }, Options: { 'com.docker.network.bridge.name': bridge } });
+    }
+    await this.syncServices(spec);
     try { await this.container!.inspect().then(async (i) => { if (!i.State.Running) await this.container!.start(); }); }
     catch {
       const c = await this.docker.createContainer({
@@ -146,6 +160,58 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
     }
     try { await this.docker.getNetwork(this.name).connect({ Container: this.opts.traefikContainer }); }
     catch (e: any) { if (!/already exists|No such container|not found|already/i.test(String(e?.message))) throw e; }
+  }
+
+  private svcName(n: string) { return `${this.name}-svc-${n}`; }
+  private async removeContainers() {
+    await this.container!.remove({ force: true }).catch(() => {});
+    for (const c of await this.docker.listContainers({ all: true, filters: { label: [`bivouac.task=${this.opts.taskId}`] } })) await this.docker.getContainer(c.Id).remove({ force: true }).catch(() => {});
+  }
+  /** Starts the declared sidecars (own instances, on the task network, reachable by name) and removes the others. */
+  private async syncServices(spec: SandboxSpec) {
+    const want = spec.services ?? {};
+    const labels = (n: string) => ({ 'bivouac.managed': 'true', 'bivouac.task': String(spec.taskId), 'bivouac.service': n });
+    for (const c of await this.docker.listContainers({ all: true, filters: { label: [`bivouac.task=${spec.taskId}`] } })) {
+      const n = c.Labels['bivouac.service'];
+      if (n && !want[n]) {
+        await this.docker.getContainer(c.Id).remove({ force: true }).catch(() => {});
+        await this.docker.getVolume(`${this.svcName(n)}-data`).remove().catch(() => {});
+      }
+    }
+    for (const [n, sc] of Object.entries(want)) {
+      const c = this.docker.getContainer(this.svcName(n));
+      const info = await c.inspect().catch(() => null);
+      if (info && info.Config.Image !== sc.image) { await c.remove({ force: true }).catch(() => {}); }
+      else if (info) { if (!info.State.Running) await c.start(); continue; }
+      await this.pullIfMissing(sc.image);
+      const vol = `${this.svcName(n)}-data`;
+      if (sc.volume) await this.docker.createVolume({ Name: vol, Labels: labels(n) });
+      const created = await this.docker.createContainer({
+        name: this.svcName(n), Image: sc.image, Labels: labels(n),
+        Env: Object.entries(sc.env ?? {}).map(([k, v]) => `${k}=${v}`),
+        NetworkingConfig: { EndpointsConfig: { [this.name]: { Aliases: [n] } } },
+        HostConfig: {
+          NetworkMode: this.name,
+          Binds: sc.volume ? [`${vol}:${sc.volume}`] : undefined,
+          NanoCpus: Math.round((sc.cpus ?? 1) * 1e9),
+          Memory: parseMemory(sc.memory ?? '512m'),
+          PidsLimit: 512,
+          RestartPolicy: { Name: 'no' },
+          SecurityOpt: ['no-new-privileges:true'],
+          CapDrop: ['NET_RAW'],
+        },
+      });
+      await created.start();
+    }
+  }
+  private async pullIfMissing(image: string) {
+    if (await this.docker.getImage(image).inspect().then(() => true, () => false)) return;
+    await new Promise<void>((resolve, reject) => {
+      this.docker.pull(image, (err: Error | null, st: NodeJS.ReadableStream) => {
+        if (err) return reject(new Error(`cannot pull the image ${image}: ${err.message}`));
+        this.docker.modem.followProgress(st, (e: Error | null) => (e ? reject(new Error(`cannot pull the image ${image}: ${e.message}`)) : resolve()));
+      });
+    });
   }
 
   async exec(cmd: string[], o: ExecOpts = {}): Promise<number> {
@@ -188,6 +254,9 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
   }
   async stop() {
     try { await this.container!.stop({ t: 5 }); } catch { /* already stopped / absent */ }
+    for (const c of await this.docker.listContainers({ filters: { label: [`bivouac.task=${this.opts.taskId}`, 'bivouac.service'] } }).catch(() => [])) {
+      await this.docker.getContainer(c.Id).stop({ t: 5 }).catch(() => {});
+    }
   }
   async destroy() {
     // A non-root executor (dev/CI) cannot delete files the container user created: let the container do it.
@@ -196,6 +265,12 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
     }
     try { await this.docker.getNetwork(this.name).disconnect({ Container: this.opts.traefikContainer, Force: true }); } catch { /* not connected */ }
     try { await this.container!.remove({ force: true }); } catch { /* absent */ }
+    for (const c of await this.docker.listContainers({ all: true, filters: { label: [`bivouac.task=${this.opts.taskId}`] } }).catch(() => [])) {
+      await this.docker.getContainer(c.Id).remove({ force: true, v: true }).catch(() => {});
+    }
+    for (const v of (await this.docker.listVolumes({ filters: { label: [`bivouac.task=${this.opts.taskId}`] } }).catch(() => ({ Volumes: [] as { Name: string }[] }))).Volumes ?? []) {
+      await this.docker.getVolume(v.Name).remove({ force: true }).catch(() => {});
+    }
     try { await this.docker.getNetwork(this.name).remove(); } catch { /* absent */ }
     this.removeWorkspace(this.taskDir);
   }
