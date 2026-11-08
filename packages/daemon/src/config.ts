@@ -89,7 +89,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, o: { needSecret
     oauthRedirectAllow: [...DEFAULT_REDIRECT_ALLOW, ...extra],
     testMode: env.BIVOUAC_TEST_MODE === '1',
     version: env.BIVOUAC_VERSION ?? 'dev',
-    releasesUrl: env.BIVOUAC_RELEASES_URL ?? 'https://api.github.com/repos/harijoe/bivouac/releases?per_page=30',
+    releasesUrl: env.BIVOUAC_RELEASES_URL || 'https://api.github.com/repos/harijoe/bivouac/releases?per_page=30',
     daemonImage: env.BIVOUAC_DAEMON_IMAGE ?? '',
     hostOptDir: env.BIVOUAC_HOST_OPT_DIR ?? '/opt/bivouac',
   };

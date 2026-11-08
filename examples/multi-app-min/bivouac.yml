@@ -1,0 +1,9 @@
+# starts with the front only: a task grows it by editing this file (ports, services)
+dev:
+  command: node server.mjs
+ports:
+  web: 5173
+success: "true"
+limits:
+  cpus: 1
+  memory: 1g

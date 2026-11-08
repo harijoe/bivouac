@@ -14,6 +14,7 @@
 #   CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY      preset Claude credentials (otherwise connect Claude in the wizard)
 #   BIVOUAC_CLAUDE_BIN         claude binary inside task containers (default: claude; tests use /opt/bivouac/fake-claude)
 #   BIVOUAC_MAX_PARALLEL       tasks running at once (default 4)
+#   BIVOUAC_RELEASES_URL       where new versions are announced (GitHub releases API format; tests use a fake server)
 #   BIVOUAC_SOURCE_DIR         developer option: build the images from a source checkout instead of pulling them
 set -euo pipefail
 
@@ -44,7 +45,7 @@ if [ -f "$ENV_FILE" ]; then
     case "$k" in
       BIVOUAC_EXECUTOR_TOKEN) PREV_EXEC_TOKEN="$v";;
       BIVOUAC_ACCESS_TOKEN) UPGRADED_FROM_01=1;;
-      CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|BIVOUAC_ACME_EMAIL|BIVOUAC_CLAUDE_BIN|BIVOUAC_MAX_PARALLEL|BIVOUAC_ACME_STAGING)
+      CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|BIVOUAC_ACME_EMAIL|BIVOUAC_CLAUDE_BIN|BIVOUAC_MAX_PARALLEL|BIVOUAC_ACME_STAGING|BIVOUAC_RELEASES_URL)
         if [ -n "$v" ] && [ -z "${!k:-}" ]; then export "$k=$v"; fi;;
     esac
   done < "$ENV_FILE"
@@ -122,6 +123,7 @@ BIVOUAC_CLAUDE_BIN=${BIVOUAC_CLAUDE_BIN:-claude}
 BIVOUAC_MAX_PARALLEL=${BIVOUAC_MAX_PARALLEL:-4}
 BIVOUAC_ACME_EMAIL=${BIVOUAC_ACME_EMAIL:-}
 BIVOUAC_ACME_STAGING=${BIVOUAC_ACME_STAGING:-}
+BIVOUAC_RELEASES_URL=${BIVOUAC_RELEASES_URL:-}
 CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
 ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
 EOT

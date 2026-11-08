@@ -1,0 +1,17 @@
+# front (5173) + API (3000) + a Postgres of its own for every task
+dev:
+  command: node server.mjs
+ports:
+  web: 5173
+  api: 3000
+services:
+  postgres:
+    image: postgres:16-alpine
+    env:
+      POSTGRES_PASSWORD: dev
+    volume: /var/lib/postgresql/data
+    memory: 512m
+success: node check.mjs
+limits:
+  cpus: 1
+  memory: 1g

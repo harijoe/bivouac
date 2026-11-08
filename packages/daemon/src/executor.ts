@@ -143,7 +143,7 @@ export function createExecutorApp(cfg: DaemonConfig, docker: Dockerode, login: L
     if (await docker.getContainer(updaterName).inspect().then((i) => i.State.Running, () => false)) throw new Error('an update is already running');
     await docker.getContainer(updaterName).remove({ force: true }).catch(() => {});
     const image = `${m[1]}/bivouac-daemon:${version}`;
-    await new Promise<void>((resolve, reject) => docker.pull(image, (err: Error | null, st: NodeJS.ReadableStream) => {
+    if (!(await docker.getImage(image).inspect().then(() => true, () => false))) await new Promise<void>((resolve, reject) => docker.pull(image, (err: Error | null, st: NodeJS.ReadableStream) => {
       if (err) return reject(new Error(`cannot download ${image}: ${err.message}`));
       docker.modem.followProgress(st, (e: Error | null) => (e ? reject(new Error(`cannot download ${image}: ${e.message}`)) : resolve()));
     }));
