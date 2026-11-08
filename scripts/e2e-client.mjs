@@ -84,7 +84,7 @@ const transport = new StreamableHTTPClientTransport(mcpUrl, { authProvider: prov
 const mcp = new Client({ name: 'e2e', version: '1' });
 await mcp.connect(transport);
 const tools = (await mcp.listTools()).tools;
-check(tools.length === 11 && tools.find((t) => t.name === 'list_projects').annotations.readOnlyHint === true, 'all 11 tools listed with annotations');
+check(tools.length === 13 && tools.find((t) => t.name === 'list_projects').annotations.readOnlyHint === true, 'all 13 tools listed with annotations');
 const call = async (name, a) => mcp.callTool({ name, arguments: a });
 check(toolJson(await call('list_projects', {})).some((p) => p.name === 'demo'), 'list_projects sees the project');
 
