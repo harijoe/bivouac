@@ -13,7 +13,7 @@ Each agent works in its own container, on its own git branch, and gets a live pr
 
 ## Contents
 
-[What you need](#what-you-need) · [Install](#install) · [The setup page](#the-setup-page) · [Connect your chat](#connect-your-chat) · [Daily use](#daily-use) · [Sharing a preview](#sharing-a-preview) · [Project configuration](#project-configuration-bivouacyml) · [Your own domain](#your-own-domain) · [Security model](#security-model) · [Update and uninstall](#update-and-uninstall) · [Troubleshooting](#troubleshooting) · [Claude subscriptions](#about-claude-subscriptions) · [Development](#development)
+[What you need](#what-you-need) · [Install](#install) · [The setup page](#the-setup-page) · [Connect your chat](#connect-your-chat) · [Daily use](#daily-use) · [Sharing a preview](#sharing-a-preview) · [Project configuration](#project-configuration-bivouacyml) · [Your own domain](#your-own-domain) · [Security model](#security-model) · [Update](#update) · [Uninstall](#uninstall) · [Troubleshooting](#troubleshooting) · [Claude subscriptions](#about-claude-subscriptions) · [Development](#development)
 
 ## What you need
 
@@ -67,7 +67,9 @@ bivouac exposes an **MCP server** at `https://<your-address>/mcp`. Add it as a c
 
 Connected apps are listed in **Settings → Connected chat apps**, with a one-click *Disconnect*.
 
-The tools your assistant gets: `list_projects`, `list_tasks`, `get_task`, `create_task`, `send_instruction`, `stop_task`, `resume_task`, `create_share_link`, `revoke_share_link`, `push_branch`, `open_pr`. Read-only tools are marked as such, so your chat app only asks for confirmation before actions that change something. `create_task` returns immediately; the assistant follows progress with `get_task`.
+The tools your assistant gets: `list_projects`, `list_tasks`, `get_task`, `create_task`, `send_instruction`, `stop_task`, `resume_task`, `create_share_link`, `revoke_share_link`, `push_branch`, `open_pr`, plus two read-only tools to plan the next step: `get_project_context` and `read_project_file`. Read-only tools are marked as such, so your chat app only asks for confirmation before actions that change something. `create_task` returns immediately; the assistant follows progress with `get_task`.
+
+**Planning the next mission from your chat.** `get_project_context(project)` returns, in one call, a compact snapshot (about 10 000 tokens): repository, default branch and last commit, the effective `bivouac.yml`, your README and project notes (`CLAUDE.md`, `AGENTS.md`, `PROGRESS.md`, `NOTES.md`, `docs/decisions.md`, `CHANGELOG.md`, shortened), the code structure (folders, languages, sizes; no file contents), recent commits, recent and running tasks (prompt, status, cost, branch, pull request state, what the agent did, last verification) and known problems. Ask for more with `detail` (`task:<name>`, `doc:<path>`, `tree`, `commits`); `read_project_file` reads one file (60 000 characters at most). It is read-only, fetches the repository from GitHub at each call with the repo-limited token, never starts a container, and never includes secrets: `.env` files, keys and files ignored by git are refused, and token-like strings are masked. The **“Plan the next mission”** prompt of the MCP server walks the conversation through it: where the project stands, what is missing, and a proposed next mission with a ready-to-run `create_task` prompt and success command.
 
 ## Daily use
 
@@ -93,14 +95,38 @@ Optional file at the root of a repository (the dashboard's *Default limits* and 
 ```yaml
 setup: pnpm install            # runs once per task workspace
 dev:
-  command: pnpm dev --host 0.0.0.0
-  port: 5173                   # the preview shows this port
+  command: pnpm dev --host 0.0.0.0   # one command; it may start several servers
+ports:                         # named ports; the first one is the main preview
+  web: 5173
+  api: 3000
+services:                      # sidecars: one instance per task
+  postgres:
+    image: postgres:16
+    env: { POSTGRES_PASSWORD: dev }
+    volume: /var/lib/postgresql/data
+    memory: 512m               # default 512m, 1 CPU
 success: pnpm test && pnpm build
 limits: { cpus: 2, memory: 4g }
 budget: { max_iterations: 10, max_cost_usd: 20 }
 ```
 
-See [`examples/vite-app`](examples/vite-app) for a working project.
+See [`examples/vite-app`](examples/vite-app) (one port) and [`examples/multi-app`](examples/multi-app) (front + API + Postgres). The old `dev: { command, port }` form still works.
+
+### Several ports
+
+Each port in `ports` gets its own address. The **first** one keeps the usual `https://<task>.<project>.<domain>`; the others are `https://<name>.<task>.<project>.<domain>` (for example `https://api.login-page.my-app.<domain>`). All of them have the same protection (owner ticket, or a share link, which opens every port of the task). The dashboard and the MCP tool `get_task` list every address. Port names are lowercase letters, digits and dashes; at most 6 ports.
+
+### Services (Postgres, Redis, …)
+
+Every task gets **its own instance** of each service, started before the task's setup, on the task's private network, and removed with the task (volume included). Reach it by its name: `postgres:5432`, `redis:6379` — never `localhost`, and never through a port of the server. Services have CPU and memory limits (1 CPU and 512 MB unless you set `cpus` / `memory`); at most 5 per project. The agent is told which services exist and how to reach them.
+
+### The agent can change both
+
+Each time an agent session starts (a new attempt, a resume), bivouac reads `bivouac.yml` again from the task's working copy. A port or service the agent added gets its address or instance automatically; a removed one disappears. If the file becomes invalid the task keeps running with the last valid configuration, and the error is shown in the task view and given to the agent in its next prompt.
+
+### Network isolation
+
+Each task has its own Docker network (no port is published on the server; Traefik joins it to route the previews). On top of that, bivouac installs a small firewall (`bivouac-firewall.service`, removed by the uninstaller) so that a task container or a service **cannot reach anything running on the server itself**: SSH, bivouac's internal ports, Traefik's API. It cannot reach the `web` and `executor` containers either, nor the cloud provider's metadata address (`169.254.169.254`). Internet access and the traffic between a task and its own services are untouched.
 
 ## Your own domain
 
@@ -129,13 +155,25 @@ Click **Verify**: bivouac waits for the records, gets the certificate and moves 
 
 **Also**: rate limiting and temporary blocking on public endpoints, a strict Content-Security-Policy, an audit log (*Settings → Recent activity*), secrets encrypted at rest with a key outside the database.
 
-**What an agent can reach**: its own container (non-root, no Docker socket, CPU and memory limits), its repository checkout, and the internet. It cannot see other tasks or the host. Agents run with permissions checks disabled inside their sandbox: give them only repositories you are comfortable with.
+**What an agent can reach**: its own container (non-root, no Docker socket, CPU and memory limits), its own services, its repository checkout, and the internet. It cannot see other tasks, and a firewall keeps it away from everything on the server itself (SSH, bivouac's internal ports, Traefik's API, the cloud metadata address). Agents run with permissions checks disabled inside their sandbox: give them only repositories you are comfortable with.
 
-## Update and uninstall
+## Update
 
-**Update**: run the install command again. It keeps your data and settings, including from a 0.1.x installation (Tailscale is no longer used; the 0.1 database is migrated).
+**From the dashboard** (administrators). bivouac checks GitHub once a day for a newer published release (pre-releases and drafts are ignored); *Settings → Version → Check now* looks immediately. When a version is available, administrators see a discreet banner linking to the release notes and an **Update** button.
 
-**Uninstall**: `sudo bash /opt/bivouac/uninstall.sh` removes the service and containers; add `--purge` to delete all data and the images.
+What the update does, in order: back up the database and the configuration (the last 3 backups are kept in `/var/lib/bivouac/backups`), download the new images, regenerate the configuration, recreate the services, wait for the new version to be healthy. **If it does not start, bivouac goes back to the previous version by itself** (images, configuration and database) and shows the reason in the dashboard. The page shows each step and reloads on the new version. Every update is recorded in *Recent activity* (who, from which version to which version, result).
+
+If tasks are running, the default is **“update when no task is running”**: no new task can start meanwhile (an assistant that tries gets an explanation and when to retry) and you can cancel the schedule. **“Update now”** stops the running tasks cleanly (status *Stopped*; resume them afterwards). Running agents are not carried over a restart: a task container survives, but the agent session streaming from it does not, so a stop and resume is the honest way.
+
+**Automatic updates** (off by default, *Settings → Version*): new versions are installed at night (02:00–05:00 server time), only when no task runs, with the same backup and rollback. A version that already failed is not retried automatically.
+
+**Over SSH**: run the install command again. It uses exactly the same steps (backup, rollback included) and keeps your data and settings, including from a 0.1.x installation.
+
+**Problems**: the progress is in `/var/lib/bivouac/web/update-status.json`; logs with `docker logs bivouac-web` and `journalctl -u bivouac`. To go back by hand: copy a folder of `/var/lib/bivouac/backups/<date>/` (`web/` = database and key, `bivouac.env`, `docker-compose.yml`) over the live files, then `cd /opt/bivouac && docker compose up -d`. Updating needs access to the registry of the images (ghcr.io by default).
+
+## Uninstall
+
+`sudo bash /opt/bivouac/uninstall.sh` removes the services, containers and firewall rules; add `--purge` to delete all data (including backups) and the images.
 
 ## Troubleshooting
 
@@ -149,6 +187,9 @@ Click **Verify**: bivouac waits for the records, gets the certificate and moves 
 | `bivouac: command not found` | The installer did not finish; run it again. |
 | A preview shows “Bad Gateway” | The dev server is not up yet or crashed: see *Dev server logs* in the task. |
 | Preview certificate warning right after a rename | The certificate for the new address is being issued (a few seconds). |
+| The update did not work | The dashboard says why and bivouac is back on the previous version. Check `docker logs bivouac-web`, then try again or run the installer over SSH. |
+| A task cannot reach a service (`postgres`) | Use the service name as the host (`postgres:5432`), not `localhost`, and wait for it to start (a database needs a few seconds). |
+| A task needs to reach something on the server itself | This is blocked on purpose (see *Network isolation*). Expose it on the Internet or run it as a service in `bivouac.yml`. |
 | Chat app cannot connect | Check the address ends with `/mcp`, that it uses HTTPS, and that you signed in with an allowed GitHub account. |
 
 Logs: `docker logs bivouac-web`, `docker logs bivouac-executor`, `docker logs bivouac-traefik`.

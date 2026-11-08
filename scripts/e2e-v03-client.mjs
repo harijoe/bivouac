@@ -87,7 +87,7 @@ const commands = {
   async seed() {
     await authorize();
     await connectClaude();
-    const added = await dash('POST', '/api/projects', { repoUrl: args['repo-url'], githubToken: args['gh-token'], name: 'legacy', defaultBranch: 'example-legacy' });
+    const added = await dash('POST', '/api/projects', { repoUrl: args['repo-url'], githubToken: process.env.GH_TOKEN, name: 'legacy', defaultBranch: 'example-legacy' });
     check(added.status === 201, 'project legacy added');
     await dash('PUT', '/api/settings/budgets', { maxIterations: 7, maxCostUsd: 3 });
     const { call } = await mcp();
@@ -180,7 +180,7 @@ const commands = {
   },
 
   async multi() {
-    const added = await dash('POST', '/api/projects', { repoUrl: args['repo-url'], githubToken: args['gh-token'], name: 'multi', defaultBranch: 'example-multi' });
+    const added = await dash('POST', '/api/projects', { repoUrl: args['repo-url'], githubToken: process.env.GH_TOKEN, name: 'multi', defaultBranch: 'example-multi' });
     check(added.status === 201 || added.status === 409, 'project multi added');
     const { call } = await mcp();
     const tasks = {};
@@ -217,7 +217,7 @@ const commands = {
   },
 
   async grow() {
-    const added = await dash('POST', '/api/projects', { repoUrl: args['repo-url'], githubToken: args['gh-token'], name: 'grow', defaultBranch: 'example-multi-min' });
+    const added = await dash('POST', '/api/projects', { repoUrl: args['repo-url'], githubToken: process.env.GH_TOKEN, name: 'grow', defaultBranch: 'example-multi-min' });
     check(added.status === 201 || added.status === 409, 'project grow added (front only)');
     const { call } = await mcp();
     // the first check edits bivouac.yml (adds the api port and a redis) and fails: the next agent session must pick the change up
@@ -270,3 +270,4 @@ const commands = {
 if (!commands[cmd]) { console.error(`unknown command ${cmd}`); process.exit(2); }
 console.log(`\n== ${cmd}`);
 await commands[cmd]();
+process.exit(0); // the MCP transport keeps the event loop alive

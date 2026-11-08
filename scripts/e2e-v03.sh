@@ -29,7 +29,8 @@ ENVF="STAGING=1"
 CL=(node scripts/e2e-v03-client.mjs)
 STATE="$TMP/state.json"
 client() { local c="$1"; shift; "${CL[@]}" "$c" --base "$BASE" --session "$SESSION" --state "$STATE" --insecure "$@" 2>&1 | OUT; [ "${PIPESTATUS[0]}" = 0 ] || fail "client step $c failed"; }
-REPO=(--repo-url https://github.com/harijoe/bivouac.git --gh-token "$GITHUB_TOKEN")
+REPO=(--repo-url https://github.com/harijoe/bivouac.git)
+export GH_TOKEN="$GITHUB_TOKEN"
 
 say "uploading the checkout"
 git archive --format=tar.gz HEAD | SSHR 'mkdir -p /root/src && tar xz -C /root/src'
