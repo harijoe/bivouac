@@ -148,8 +148,8 @@ export function createExecutorApp(cfg: DaemonConfig, docker: Dockerode, login: L
       docker.modem.followProgress(st, (e: Error | null) => (e ? reject(new Error(`cannot download ${image}: ${e.message}`)) : resolve()));
     }));
     const c2 = await docker.createContainer({
-      name: updaterName, Image: image, Entrypoint: ['sh', '-c'], Labels: { 'bivouac.managed': 'true', 'bivouac.updater': 'true' }, Env: [`V=${version}`],
-      Cmd: ['cp /app/apply.sh /host-opt/apply.sh && cp /app/uninstall.sh /host-opt/uninstall.sh && chmod 755 /host-opt/apply.sh /host-opt/uninstall.sh && exec nsenter -t 1 -m -u -i -n -p -- /opt/bivouac/apply.sh update "$V"'],
+      name: updaterName, Image: image, Entrypoint: ['sh', '-c'], Labels: { 'bivouac.managed': 'true', 'bivouac.updater': 'true' }, Env: [`V=${version}`, `T=${process.env.BIVOUAC_HEALTH_TIMEOUT ?? '150'}`],
+      Cmd: ['cp /app/apply.sh /host-opt/apply.sh && cp /app/uninstall.sh /host-opt/uninstall.sh && chmod 755 /host-opt/apply.sh /host-opt/uninstall.sh && exec nsenter -t 1 -m -u -i -n -p -- env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin BIVOUAC_HEALTH_TIMEOUT="$T" /opt/bivouac/apply.sh update "$V"'],
       HostConfig: { Privileged: true, PidMode: 'host', AutoRemove: true, Binds: [`${cfg.hostOptDir}:/host-opt`] },
     });
     await c2.start();
