@@ -21,58 +21,12 @@ for a in "$@"; do case "$a" in --real) MODE=real;; --ghcr) IMAGES=ghcr;; --domai
 : "${HCLOUD_TOKEN:?HCLOUD_TOKEN is required}"; : "${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
 [ "$MODE" = fake ] || : "${CLAUDE_CODE_OAUTH_TOKEN:?CLAUDE_CODE_OAUTH_TOKEN is required for --real}"
 [ "$DOMAINMODE" = 0 ] || : "${PREVIEW_DOMAIN:?PREVIEW_DOMAIN is required for --domain}"
-PRIMARY_IP_ID=161046145
-
-RUN="$(date +%s)-$RANDOM"
-NAME="bivouac-dev-e2e-$RUN"
-TMP="$(mktemp -d)"
-API=https://api.hetzner.cloud/v1
-hc() { curl -fsS -H "Authorization: Bearer $HCLOUD_TOKEN" -H 'Content-Type: application/json' "$@"; }
-say() { printf '\n\033[1;36m[e2e %s]\033[0m %s\n' "$NAME" "$*"; }
-SERVER_ID=""; KEY_ID=""; IP=""
-SSH=(ssh -i "$TMP/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ServerAliveInterval=15 -o ConnectTimeout=10)
-
-cleanup() {
-  local rc=$?
-  set +e
-  say "cleanup (exit code $rc)"
-  [ -n "$SERVER_ID" ] && hc -X DELETE "$API/servers/$SERVER_ID" >/dev/null && say "server $SERVER_ID deleted"
-  # wait for the server to be gone before removing its key
-  for _ in $(seq 1 30); do [ -z "$SERVER_ID" ] && break; hc "$API/servers/$SERVER_ID" >/dev/null 2>&1 || break; sleep 2; done
-  [ -n "$KEY_ID" ] && hc -X DELETE "$API/ssh_keys/$KEY_ID" >/dev/null && say "ssh key $KEY_ID deleted"
-  left=$(hc "$API/servers?label_selector=purpose%3Dbivouac-dev-e2e" | jq -r '.servers[].name' | grep -c "$RUN")
-  [ "$left" = 0 ] && say "no leftover resource" || say "WARNING: leftover server(s) for run $RUN"
-  rm -rf "$TMP"
-  exit $rc
-}
-trap cleanup EXIT
-trap 'exit 130' INT TERM
-
-# stale servers of previous (crashed) runs: ours by prefix, older than 3 hours
-hc "$API/servers?label_selector=purpose%3Dbivouac-dev-e2e" | jq -r --argjson cutoff "$(( $(date +%s) - 10800 ))" '.servers[] | select(.name|startswith("bivouac-dev-e2e-")) | select((.created|fromdateiso8601) < $cutoff) | .id' | while read -r id; do
-  say "deleting stale server $id"; hc -X DELETE "$API/servers/$id" >/dev/null || true
-done
+. scripts/lib-hcloud.sh
 
 say "publishing the example app branch"
 GIT_ASKPASS="$HOME/.bivouac-askpass.sh" ./scripts/publish-example.sh example-app >/dev/null 2>&1 || say "(could not publish example-app, using existing branch)"
 
-say "creating SSH key and server"
-ssh-keygen -q -t ed25519 -N '' -f "$TMP/key"
-KEY_ID=$(hc -X POST "$API/ssh_keys" -d "$(jq -n --arg n "$NAME" --arg k "$(cat "$TMP/key.pub")" '{name:$n,public_key:$k,labels:{purpose:"bivouac-dev-e2e"}}')" | jq -r .ssh_key.id)
-TYPE="${HCLOUD_TYPE:-$(hc "$API/server_types?per_page=50" | jq -r '[.server_types[] | select(.deprecated != true and .architecture=="x86" and .cores>=2 and .memory>=4 and .cpu_type=="shared")] | sort_by(.prices[0].price_hourly.gross|tonumber) | .[0].name')}"
-LOCATION="${HCLOUD_LOCATION:-nbg1}"
-say "server type: $TYPE in $LOCATION"
-if [ "$DOMAINMODE" = 1 ]; then
-  assigned=$(hc "$API/primary_ips/$PRIMARY_IP_ID" | jq -r '.primary_ip.assignee_id // empty')
-  [ -z "$assigned" ] || { echo "reserved primary IP is still attached to server $assigned" >&2; exit 1; }
-  PUBNET=$(jq -n --argjson ip "$PRIMARY_IP_ID" '{enable_ipv4:true,enable_ipv6:false,ipv4:$ip}'); LOCATION=nbg1
-else PUBNET='{"enable_ipv6":false}'; fi
-resp=$(hc -X POST "$API/servers" -d "$(jq -n --arg n "$NAME" --arg t "$TYPE" --arg l "$LOCATION" --argjson k "$KEY_ID" --argjson pn "$PUBNET" '{name:$n,server_type:$t,image:"ubuntu-24.04",location:$l,ssh_keys:[$k],labels:{purpose:"bivouac-dev-e2e"},public_net:$pn}')")
-SERVER_ID=$(echo "$resp" | jq -r .server.id)
-IP=$(echo "$resp" | jq -r .server.public_net.ipv4.ip)
-say "server $SERVER_ID at $IP"
-for _ in $(seq 1 60); do "${SSH[@]}" "root@$IP" true 2>/dev/null && break; sleep 3; done
-"${SSH[@]}" "root@$IP" 'grep PRETTY /etc/os-release; command -v docker || echo "(fresh: no docker)"'
+vm_up $([ "$DOMAINMODE" = 1 ] && echo --domain)
 
 # ---- the install command, taken verbatim from the README
 CMD="$(awk '/<!-- e2e:install:start -->/{f=1;next} /<!-- e2e:install:end -->/{f=0} f' README.md | sed '/^```/d')"
@@ -96,7 +50,6 @@ say "running the installer on the VM"
 [ "${PIPESTATUS[1]}" = 0 ] || { echo "installer failed" >&2; exit 1; }
 
 say "verifying from the server side"
-SSHR() { "${SSH[@]}" "root@$IP" "$@"; }
 SSHR 'docker ps --format "{{.Names}} {{.Status}}" | grep ^bivouac' | sed 's/^/  vm| /'
 SSHR '! docker inspect bivouac-web --format "{{json .HostConfig.Binds}}" | grep -q docker.sock' && say "web has no Docker socket mounted"
 SSHR '! docker exec bivouac-web test -e /var/run/docker.sock' && say "web cannot see the Docker socket"

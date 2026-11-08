@@ -51,6 +51,13 @@ export function gitignoreMatcher(text: string | null): (p: string) => boolean {
   return (p) => { let ignored = false; for (const r of rules) if (r.re.test(p + (p.endsWith('/') ? '' : '/')) || r.re.test(p)) ignored = !r.neg; return ignored; };
 }
 
+/** Service environment variables are mostly credentials: show their names, never their values. */
+export function hideEnvValues<T extends { services?: Record<string, { env?: Record<string, string> }> }>(cfg: T): T {
+  if (!cfg.services) return cfg;
+  const services = Object.fromEntries(Object.entries(cfg.services).map(([n, sv]) => [n, sv.env ? { ...sv, env: Object.fromEntries(Object.keys(sv.env).map((k) => [k, '[hidden]'])) } : sv]));
+  return { ...cfg, services };
+}
+
 /** Keeps the start and the end of a text: the start says what it is, the end says where it stopped. */
 export function truncateSmart(text: string, max: number, hint = 'use read_project_file for the full file'): string {
   if (text.length <= max) return text;
@@ -239,7 +246,7 @@ export class ProjectContext {
     let repoCfg = {};
     const cfgText = await this.show(dir, ref, 'bivouac.yml', 20_000);
     if (cfgText) try { repoCfg = parseProjectConfig(cfgText); } catch { /* reported below */ }
-    out.push('', '## Effective bivouac.yml (repository file + dashboard overrides)', '```json', JSON.stringify(mergeConfig(repoCfg, p.config), null, 1), '```');
+    out.push('', '## Effective bivouac.yml (repository file + dashboard overrides)', '```json', JSON.stringify(hideEnvValues(mergeConfig(repoCfg, p.config)), null, 1), '```');
     if (cfgText) try { parseProjectConfig(cfgText); } catch (e: any) { out.push(`> bivouac.yml on ${ref} is invalid: ${e.message}`); }
 
     out.push('', '## Documentation');

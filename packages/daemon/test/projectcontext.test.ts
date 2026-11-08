@@ -17,7 +17,7 @@ const FILES = {
   'secret-notes.txt': 'do not show me\n',
   'src/index.ts': 'export const x = 1;\n',
   'src/deep/a.ts': 'export const a = 2;\n',
-  'bivouac.yml': 'success: "true"\ndev:\n  command: sleep 1000\n  port: 3001\n',
+  'bivouac.yml': 'success: "true"\ndev:\n  command: sleep 1000\n  port: 3001\nservices:\n  db:\n    image: postgres:16\n    env: { POSTGRES_PASSWORD: hunter2 }\n',
   'keys/server.pem': '-----BEGIN PRIVATE KEY-----\nabcdef\n-----END PRIVATE KEY-----\n',
 };
 function remoteWithFiles() {
@@ -91,7 +91,7 @@ describe('project snapshot', () => {
     expect(out).toMatch(/Known problems[\s\S]*expensive[^\n]*budget[\s\S]*billing[^\n]*verification failing/);
     expect(out).toContain('"dev"');                          // effective config
     // no secret, no ignored or secret file, no file contents
-    for (const bad of [GHP, 'SuperSecretPassw0rd', 'do not show me', 'BEGIN PRIVATE KEY', 'export const x = 1', 'secret-notes.txt', 'server.pem']) expect(out, bad).not.toContain(bad);
+    for (const bad of [GHP, 'SuperSecretPassw0rd', 'do not show me', 'BEGIN PRIVATE KEY', 'hunter2', 'export const x = 1', 'secret-notes.txt', 'server.pem']) expect(out, bad).not.toContain(bad);
     expect(out.length).toBeLessThan(SNAPSHOT_CHARS * 1.3);
   });
 

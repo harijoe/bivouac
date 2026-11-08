@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@bivouac/shared": "workspace:*",
-    "@hono/node-server": "^1.13.0",
+    "@hono/node-server": "^2.1.3",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "better-sqlite3": "^11.5.0",
     "dockerode": "^4.0.2",
