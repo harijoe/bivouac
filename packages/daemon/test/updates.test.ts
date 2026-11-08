@@ -140,3 +140,16 @@ describe('update API rights', () => {
     expect(r.version).toBe('0.2.0');
   });
 });
+
+describe('update outcome audit', () => {
+  it('records the result once, as soon as the status is read', async () => {
+    const a = await build([rel('v0.3.0')]);
+    await a.u.check();
+    await a.u.start('idle', 'julien');
+    const { writeFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    writeFileSync(path.join(a.cfg.dataDir, 'update-status.json'), JSON.stringify({ state: 'done', step: 'health', steps: [], from: '0.2.0', to: '0.3.0', error: null, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }));
+    a.u.status(); a.u.status();
+    expect(a.ctx.auth.listAudit(50).filter((e: any) => e.action === 'update_succeeded')).toHaveLength(1);
+  });
+});

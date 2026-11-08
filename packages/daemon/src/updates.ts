@@ -98,6 +98,7 @@ export class Updates {
     return null;
   }
   status(isAdmin = true) {
+    this.recordOutcome();
     const p = this.progress();
     return {
       current: this.cfg.version,
