@@ -87,3 +87,5 @@ MISSION_V02_TERMINEE
 - CI on 4330ede verified through the Actions API (run 42427478913): test, integration and images all `success`.
 
 MISSION_FIXCI_TERMINEE
+
+MISSION_V03_TERMINEE
