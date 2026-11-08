@@ -66,6 +66,9 @@ client verify-seed --expect "$EXPECT_V"
 expect_ok "a backup of the database and configuration exists" 'ls /var/lib/bivouac/backups/*/web/bivouac.db /var/lib/bivouac/backups/*/bivouac.env'
 expect_ok "the firewall rules are installed" 'iptables -S INPUT | grep -q "bvt+" && iptables -S BIVOUAC-INPUT | grep -q DROP && systemctl is-active bivouac-firewall'
 expect_ok "the firewall unit is enabled" 'systemctl is-enabled bivouac-firewall'
+# a short health-check wait keeps the rollback test quick
+SSHR 'echo BIVOUAC_HEALTH_TIMEOUT=60 >> /etc/bivouac/bivouac.env && cd /opt/bivouac && docker compose up -d >/dev/null 2>&1'
+sleep 15
 
 if [ "$MODE" = local ]; then
   # ------------------------------------------------------------ 3. updates from the dashboard

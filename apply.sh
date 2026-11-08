@@ -288,6 +288,8 @@ deploy() {
   exit 1
 }
 
+# keep a log next to the status file, readable after the web service restarts
+[ -d "$DATA/web" ] && exec > >(tee -a "$DATA/update.log") 2>&1
 case "${1:-}" in
   deploy) deploy ;;
   update)

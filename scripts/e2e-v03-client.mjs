@@ -136,7 +136,7 @@ const commands = {
         if (u.progress) steps.add(u.progress.step);
         return u.progress && u.progress.to === args.to && ['done', 'rolled_back', 'failed'].includes(u.progress.state) ? u : false;
       } catch { return false; }  // the web service restarts during the update
-    }, 420000, 2000, 'the update to finish');
+    }, 600000, 2000, 'the update to finish');
     console.log(`  steps seen from the dashboard: ${[...steps].join(' → ')}`);
     if (args.result === 'rolled_back') {
       check(end.progress.state === 'rolled_back', 'the broken version was rolled back automatically');

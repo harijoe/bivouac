@@ -12,6 +12,10 @@ vm_cleanup() {
   local rc=$?
   set +e
   say "cleanup (exit code $rc)"
+  if [ "$rc" != 0 ] && [ -n "$IP" ]; then
+    say "diagnostics from the VM"
+    timeout 60 "${SSH[@]}" "root@$IP" 'cat /var/lib/bivouac/web/update-status.json 2>/dev/null; echo; tail -n 60 /var/lib/bivouac/update.log 2>/dev/null; docker ps -a --format "{{.Names}} {{.Status}}" | head -20; docker logs --tail 15 bivouac-web 2>&1 | cut -c1-200' 2>&1 | sed 's/^/  diag| /'
+  fi
   [ -n "$SERVER_ID" ] && hc -X DELETE "$API/servers/$SERVER_ID" >/dev/null && say "server $SERVER_ID deleted"
   for _ in $(seq 1 30); do [ -z "$SERVER_ID" ] && break; hc "$API/servers/$SERVER_ID" >/dev/null 2>&1 || break; sleep 2; done
   [ -n "$KEY_ID" ] && hc -X DELETE "$API/ssh_keys/$KEY_ID" >/dev/null && say "ssh key $KEY_ID deleted"
