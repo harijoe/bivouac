@@ -10,7 +10,18 @@ Ces points ne peuvent pas être testés de façon automatique (ils demandent ton
 3. **Choix des repos** : « Choisir les repos sur GitHub » → installation de l'app → retour automatique sur l'assistant ; ajouter un repo comme projet ; vérifier qu'un `push` et une PR fonctionnent avec le token limité au repo (permissions contents + pull requests).
 4. **Connexion Claude réelle** depuis le dashboard (`claude setup-token` dans le conteneur : URL, code collé, token stocké). Le parseur est testé sur la vraie sortie capturée du CLI 2.1.319, mais jamais bout en bout avec ton compte.
 5. **Ajout du connecteur MCP dans Claude.ai** (web et desktop), **Claude Code** (`claude mcp add --transport http …`) et **ChatGPT** (mode développeur) : le flux OAuth (métadonnées, DCR, PKCE) est testé avec le SDK officiel, pas avec ces trois clients réels. Points à surveiller : l'URL de retour de claude.ai / chatgpt.com (liste d'autorisation configurable via `BIVOUAC_OAUTH_REDIRECT_ALLOW`), l'affichage des annotations.
-6. Lecture critique de l'UI sur ton téléphone (captures dans `docs/screenshots`).
+6. Lecture critique de l'UI sur ton téléphone (captures dans `docs/screenshots`, dont la page `update`).
+7. **v0.3** : première mise à jour depuis le dashboard avec une vraie release suivante (0.3.0 → 0.3.1 quand elle existera) ; bandeau et notes rendus depuis le vrai corps d'une release GitHub ; mises à jour automatiques la nuit (seule la logique est testée, pas l'heure réelle) ; pare-feu sur ton hébergeur réel si tu utilises nftables seul.
+
+## Journal v0.3 (2026-11-08)
+Tout est vérifié par moi, sauf la liste « À valider manuellement ».
+- **Mises à jour depuis le dashboard** : détection quotidienne (releases GitHub, source configurable `BIVOUAC_RELEASES_URL`, brouillons/pré-releases ignorés), bandeau admin + notes de version, bouton avec confirmation, progression par étapes, audit (qui, de/vers, résultat), planification « quand plus rien ne tourne » (création de tâches refusée avec message clair), « maintenant » (tâches `stopped`, reprenables), mises à jour automatiques de nuit (option, off par défaut). Un seul script `apply.sh` partagé par `install.sh` et l'updater (conteneur éphémère lancé par l'executor, `web` sans socket Docker) : sauvegarde (3 gardées), pull, config, recréation, healthcheck, **retour arrière automatique** (images + config + base).
+- **Ports multiples**, **sidecars** par tâche (Postgres, Redis…), **relecture de `bivouac.yml`** à chaque session de l'agent (fichier invalide = dernière config valide + erreur signalée), **pare-feu hôte** (`bivouac-firewall.service`), isolation vérifiée sur VM (hôte, SSH, web, executor, API Traefik, métadonnées : injoignables ; Internet : OK).
+- **MCP** : `get_project_context`, `read_project_file`, prompt `plan_next_mission` ; secrets exclus et masqués.
+- **Tests** : 103 unitaires ; e2e `scripts/e2e-v03.sh` sur VM Hetzner neuve (0.2.0 GHCR → seed → 0.3.0 → mise à jour 0.3.1 → planifiée 0.3.2 → version cassée 0.3.3 avec retour arrière → « maintenant » 0.3.4 → ports/services/isolation/contexte → désinstallation) : **PASSÉ x2 de suite** sur le code final (plus un passage antérieur). L'ancien `e2e-fresh-vps.sh` (refactoré sur `lib-hcloud.sh`) repasse aussi.
+- **Passe finale** : voir `docs/review-v0.3.md` (bugs de retour arrière trouvés par l'e2e, fuite des mots de passe de services dans le contexte, audit des dépendances).
+- **Écart à la spec** : la 0.2.0 n'a pas de détection de version, donc « la vraie 0.3.0 apparaît dans le bandeau d'une VM en 0.2.0 » est impossible. Vérifié à la place : 0.2.0 → vraie 0.3.0 par `install.sh` (README), données intactes ; le chemin dashboard est couvert par l'e2e avec des versions de test (0.3.0 → 0.3.4).
+- Non réimplémenté : rattachement des agents en cours après un redémarrage (raisons dans `docs/decisions.md`).
 
 ## Journal v0.2 (2026-11-07)
 Tout est vérifié par moi (voir la liste « À valider manuellement » pour ce qui ne peut pas l'être).
@@ -25,7 +36,7 @@ Tout est vérifié par moi (voir la liste « À valider manuellement » pour ce 
 - Le flux manifest GitHub et la connexion GitHub réelle ne sont testés qu'avec GitHub mocké ; les clients Claude.ai / ChatGPT / Claude Code réels ne l'ont pas été (voir liste ci-dessus).
 - Interface en anglais uniquement.
 - Les certificats de preview sont émis par hôte (HTTP-01) : limite Let's Encrypt de 50 / semaine / domaine enregistré.
-- Pas de test arm64 ni Ubuntu 22.04 en conditions réelles ; sidecars non implémentés.
+- Pas de test arm64 ni Ubuntu 22.04 en conditions réelles.
 - Les 3 tests d'intégration ont besoin d'Docker et de ports 80 libres sur la VM de test ; ils sont lancés en CI.
 
 ## Fait (v0.1)
