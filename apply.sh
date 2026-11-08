@@ -43,11 +43,15 @@ write_status() { # state step error
   mv "$tmp" "$STATUS"
 }
 
+# The values also reach `docker compose` through the environment, where they win over the .env file:
+# reload them whenever the file changes (a stale BIVOUAC_DAEMON_IMAGE once made the rollback restart the broken version).
+load_env() {
+  while IFS='=' read -r k v; do case "$k" in ''|\#*) ;; *) export "$k=$v";; esac; done < "$ENV_FILE"
+}
+
 # ---- files
 render() {
-  set -a
-  while IFS='=' read -r k v; do case "$k" in ''|\#*) ;; *) export "$k=$v";; esac; done < "$ENV_FILE"
-  set +a
+  load_env
   DOMAIN="${BIVOUAC_DOMAIN}"
   # docker compose: Traefik (public), web (no Docker access), executor (Docker access, internal only)
 ACME_EXTRA=""
@@ -245,6 +249,7 @@ restore() { # $1 = backup dir
   log "Rolling back to the previous version"
   ( cd "$OPT" && docker compose stop web executor ) || true
   cp -a "$dir/bivouac.env" "$ENV_FILE"
+  load_env
   rm -rf "$DATA/web.failed"; mv "$DATA/web" "$DATA/web.failed" 2>/dev/null || true
   cp -a "$dir/web" "$DATA/web"
   [ -f "$dir/docker-compose.yml" ] && cp -a "$dir/docker-compose.yml" "$OPT/docker-compose.yml"
