@@ -19,7 +19,7 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
   const server = new McpServer({ name: 'bivouac', version: process.env.BIVOUAC_VERSION ?? 'dev' }, {
     instructions: 'bivouac runs Claude Code agents in isolated containers, one task per agent, each with a live preview URL. ' +
       'Typical flow: list_projects, then create_task (it returns immediately), then poll get_task until the status is succeeded, failed, budget_exceeded, max_iterations or stopped. ' +
-      'Share the previewUrl with the user. Use send_instruction to steer a running task and push_branch / open_pr to deliver the work.',
+      'Before proposing a new mission, call get_project_context (or use the plan_next_mission prompt) to see where the project stands. Share the previewUrl with the user. Use send_instruction to steer a running task and push_branch / open_pr to deliver the work.',
   });
   const tool = <S extends z.ZodRawShape>(name: string, title: string, description: string, annotations: Ann, schema: S, fn: (a: z.infer<z.ZodObject<S>>) => Promise<unknown> | unknown) =>
     server.registerTool(name, { title, description, inputSchema: schema, annotations }, (async (args: z.infer<z.ZodObject<S>>) => {
@@ -92,6 +92,37 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
   tool('open_pr', 'Open a pull request', 'Push the task branch if needed and open a pull request against the base branch. Returns the PR URL (or the existing PR if one is already open).', EXTERNAL,
     { project: PROJECT, task: TASK },
     async (a) => ({ url: await svc.openPr(svc.resolveTask(a.project, a.task), actor) }));
+
+  tool('get_project_context', 'Get the state of a project', 'Read-only snapshot of a project at this moment, to plan its next step with the user: repository and default branch, last commit, effective bivouac.yml, README and project notes (CLAUDE.md, AGENTS.md, PROGRESS.md, NOTES.md, docs/decisions.md, CHANGELOG.md), code structure (folders, languages, sizes, no file contents), recent commits, recent and running tasks (prompt, status, iterations, cost, branch, PR state, what the agent did, last verification) and known problems. About 10 000 tokens by default. ' +
+    'Use `detail` for more on one part: "task:<task name>" (everything about a task), "doc:<path>" (a whole document), "tree" (deeper structure) or "commits" (60 commits). The repository is refreshed from GitHub at each call. Secrets are never included. After reading it, propose the next mission and start it with create_task.', READ,
+    { project: PROJECT, detail: z.string().max(300).optional().describe('Optional: "task:<name>", "doc:<path>", "tree" or "commits". Leave empty for the overview.') },
+    async (a) => svc.pctx.snapshot(svc.resolveProject(a.project), a.detail));
+
+  tool('read_project_file', 'Read a file of the repository', 'Read one file from the repository on the default branch (or another branch, tag or commit with `ref`), for example a source file mentioned in get_project_context. Read-only, at most 60 000 characters. Secrets, .env files and files ignored by git are refused.', READ,
+    { project: PROJECT, path: z.string().max(500).describe('Path relative to the repository root, for example "src/index.ts".'), ref: z.string().max(200).optional().describe('Branch, tag or commit. Default: the default branch.') },
+    async (a) => {
+      try {
+        const f = await svc.pctx.readFile(svc.resolveProject(a.project), a.path, a.ref);
+        return `${f.path} @ ${f.ref}${f.truncated ? ' (truncated to 60000 characters)' : ''}\n\n${f.content}`;
+      } catch (e: any) { if (e instanceof UserError) throw e; throw new UserError(String(e?.message ?? e)); }
+    });
+
+  server.registerPrompt('plan_next_mission', {
+    title: 'Plan the next mission',
+    description: 'Review where a project stands and prepare the next mission: what is done, what is missing, and a ready-to-run prompt for create_task with its success command.',
+    argsSchema: { project: z.string().describe('Project name (see list_projects).'), goal: z.string().optional().describe('Optional: what you would like to achieve next, in your own words.') },
+  }, (a) => ({
+    description: `Plan the next mission for ${a.project}`,
+    messages: [{ role: 'user' as const, content: { type: 'text' as const, text: [
+      `Help me plan the next mission for my project "${a.project}" in bivouac.${a.goal ? ` What I have in mind: ${a.goal}` : ''}`,
+      '',
+      '1. Call get_project_context with this project. Read it carefully; if something important is cut off, call it again with `detail` ("task:<name>", "doc:<path>", "tree") or read a file with read_project_file.',
+      '2. Tell me in a few lines where the project stands: what works, what the recent tasks did (and whether their pull requests were merged), what is blocked or failing.',
+      '3. Tell me what is missing or risky, and ask me questions if my goal is unclear. Do not guess.',
+      '4. Propose the next mission: a short task name (lowercase letters, digits, dashes), a precise prompt for the agent (context, expected behaviour, constraints, what not to touch), and a success command that exits 0 only when the work is really done (tests, build, lint).',
+      '5. Wait for my approval, then start it with create_task and follow it with get_task.',
+    ].join('\n') } }],
+  }));
 
   return server;
 }

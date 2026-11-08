@@ -3,7 +3,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { describe, expect, it } from 'vitest';
 import { addProject, makeEnv, makeRemote } from './helpers.js';
 
-async function connect(env: ReturnType<typeof makeEnv>) {
+export async function connect(env: ReturnType<typeof makeEnv>) {
   const g = env.ctx.oauth.registerClient({ client_name: 'Claude', redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] });
   const code = env.ctx.oauth.issueCode({ clientId: g.clientId, githubId: 42, redirectUri: 'https://claude.ai/api/mcp/auth_callback', codeChallenge: 'x'.repeat(43) });
   // exchange the code directly through the DB-level API (PKCE is covered in oauth.test.ts)
@@ -29,8 +29,8 @@ describe('MCP server', () => {
     const c = await connect(env);
     const { tools } = await c.listTools();
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));
-    expect(Object.keys(by).sort()).toEqual(['create_share_link', 'create_task', 'get_task', 'list_projects', 'list_tasks', 'open_pr', 'push_branch', 'resume_task', 'revoke_share_link', 'send_instruction', 'stop_task']);
-    for (const ro of ['list_projects', 'list_tasks', 'get_task']) expect(by[ro].annotations?.readOnlyHint).toBe(true);
+    expect(Object.keys(by).sort()).toEqual(['create_share_link', 'create_task', 'get_project_context', 'get_task', 'list_projects', 'list_tasks', 'open_pr', 'push_branch', 'read_project_file', 'resume_task', 'revoke_share_link', 'send_instruction', 'stop_task']);
+    for (const ro of ['list_projects', 'list_tasks', 'get_task', 'get_project_context', 'read_project_file']) expect(by[ro].annotations?.readOnlyHint).toBe(true);
     for (const rw of ['create_task', 'send_instruction', 'stop_task', 'resume_task', 'create_share_link', 'revoke_share_link', 'push_branch', 'open_pr']) expect(by[rw].annotations?.readOnlyHint).toBe(false);
     expect(by.stop_task.annotations?.destructiveHint).toBe(true);
     expect(by.create_task.description).toMatch(/returns immediately/i);

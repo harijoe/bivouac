@@ -8,6 +8,7 @@ import { OAuthServer } from './oauth.js';
 import { Previews } from './preview.js';
 import { TaskManager, type SandboxFactory } from './runner.js';
 import { Service } from './service.js';
+import { ProjectContext } from './projectcontext.js';
 import { Updates, type UpdateClient } from './updates.js';
 
 export interface BuildOpts {
@@ -35,6 +36,7 @@ export function buildContext(o: BuildOpts): Ctx {
   ref.svc = svc;
   const updates = new Updates(store, cfg, mgr, auth, o.update ?? null, o.fetchImpl ?? fetch, o.now);
   svc.updates = updates;
+  svc.pctx = new ProjectContext(store, cfg, (p) => svc.repoToken(p, 'read'), o.fetchImpl ?? fetch);
   const oauth = new OAuthServer(store, () => cfg.oauthRedirectAllow);
   return {
     cfg, store, mgr, svc, auth, gh, oauth, previews, updates, limiter: new RateLimiter(), login: o.login ?? null,

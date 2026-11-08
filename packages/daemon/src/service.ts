@@ -9,6 +9,7 @@ import type { Previews, ShareDuration } from './preview.js';
 import type { TaskManager } from './runner.js';
 import { TOKEN_LIFETIME_DAYS } from './claude.js';
 import type { Updates } from './updates.js';
+import type { ProjectContext } from './projectcontext.js';
 
 /** An error whose message is safe and useful to show to a person or to a model (it says what to do next). */
 export class UserError extends Error {
@@ -31,6 +32,7 @@ export interface TaskSummary {
 export class Service {
   /** Set after construction (the updater needs the task manager). */
   updates: Updates | null = null;
+  pctx!: ProjectContext;
   constructor(public store: Store, public cfg: DaemonConfig, public mgr: TaskManager, public auth: Auth, public gh: GithubApp, public previews: Previews) {}
 
   // ---- links
