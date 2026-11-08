@@ -166,3 +166,20 @@ export function validateTaskName(name: unknown): string | null {
   if (!TASK_NAME_RE.test(name)) return `"${name}" is not a valid task name. Use only lowercase letters, digits and dashes (1 to 40 characters, not starting or ending with a dash), for example "login-page".`;
   return null;
 }
+
+/** Semantic versions: `1.2.3`, optionally `v`-prefixed and with a `-pre` suffix. */
+export interface SemVer { major: number; minor: number; patch: number; pre: string | null }
+export function parseSemver(v: string): SemVer | null {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(v.trim());
+  return m ? { major: +m[1], minor: +m[2], patch: +m[3], pre: m[4] ?? null } : null;
+}
+/** <0 when a is older than b. A pre-release is older than its release. Returns NaN when either is not a version. */
+export function compareSemver(a: string, b: string): number {
+  const x = parseSemver(a), y = parseSemver(b);
+  if (!x || !y) return NaN;
+  for (const k of ['major', 'minor', 'patch'] as const) if (x[k] !== y[k]) return x[k] - y[k];
+  if (x.pre === y.pre) return 0;
+  if (x.pre === null) return 1;
+  if (y.pre === null) return -1;
+  return x.pre < y.pre ? -1 : 1;
+}

@@ -10,7 +10,7 @@ COPY packages/dashboard/package.json packages/dashboard/
 COPY packages/task-image/ packages/task-image/
 RUN pnpm install --frozen-lockfile
 COPY packages packages
-COPY uninstall.sh uninstall.sh
+COPY uninstall.sh apply.sh ./
 RUN pnpm -r build && CI=true pnpm install --frozen-lockfile --prod
 
 FROM node:22-bookworm-slim

@@ -8,6 +8,7 @@ import type { GithubApp } from './githubapp.js';
 import type { Previews, ShareDuration } from './preview.js';
 import type { TaskManager } from './runner.js';
 import { TOKEN_LIFETIME_DAYS } from './claude.js';
+import type { Updates } from './updates.js';
 
 /** An error whose message is safe and useful to show to a person or to a model (it says what to do next). */
 export class UserError extends Error {
@@ -28,6 +29,8 @@ export interface TaskSummary {
 
 /** Everything the dashboard and the MCP server can do. One place for validation, messages and the audit trail. */
 export class Service {
+  /** Set after construction (the updater needs the task manager). */
+  updates: Updates | null = null;
   constructor(public store: Store, public cfg: DaemonConfig, public mgr: TaskManager, public auth: Auth, public gh: GithubApp, public previews: Previews) {}
 
   // ---- links
@@ -43,6 +46,11 @@ export class Service {
     const expiresAt = oauth && at ? new Date(Date.parse(at) + TOKEN_LIFETIME_DAYS * 86400_000).toISOString() : null;
     const expired = !!expiresAt && Date.parse(expiresAt) < Date.now();
     return { connected: !!(oauth || key), kind: oauth ? 'oauth' : key ? 'apikey' : null, expiresAt, expired };
+  }
+  /** No task may start while an update is scheduled or running: the error tells the assistant why and when to retry. */
+  private assertAccepting() {
+    const why = this.updates?.blockReason();
+    if (why) throw new UserError(why, 'updating', 409);
   }
   private assertClaude() {
     const s = this.claudeStatus();
@@ -131,6 +139,7 @@ export class Service {
     if (this.store.taskNameTaken(p.id, o.name)) throw new UserError(`The name "${o.name}" is already used in project "${p.name}". Propose another name (for example "${o.name.slice(0, 34)}-2").`, 'name_taken', 409);
     const prompt = String(o.prompt ?? '').trim();
     if (!prompt) throw new UserError('prompt is required: describe what the agent must build or fix.', 'invalid');
+    this.assertAccepting();
     this.assertClaude();
     const baseBranch = o.baseBranch || p.defaultBranch;
     let repoCfg = {};
@@ -166,6 +175,7 @@ export class Service {
     return this.store.getTask(t.id)!;
   }
   async resumeTask(t: Task, actor: Actor, text?: string) {
+    this.assertAccepting();
     this.assertClaude();
     await this.mgr.resume(t.id, text);
     this.auth.audit(actor.label, 'task_resumed', { task: t.name, project: t.projectName });
@@ -173,7 +183,7 @@ export class Service {
   }
   async instruct(t: Task, text: string, actor: Actor) {
     if (!text.trim()) throw new UserError('text is required', 'invalid');
-    if (!this.mgr.isActive(t.id)) this.assertClaude();
+    if (!this.mgr.isActive(t.id)) { this.assertAccepting(); this.assertClaude(); }
     this.auth.audit(actor.label, 'task_instruction', { task: t.name });
     return this.mgr.instruct(t.id, text.trim());
   }

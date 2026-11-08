@@ -36,6 +36,12 @@ export interface DaemonConfig {
   oauthRedirectAllow: string[];
   /** Skips real GitHub calls: tests only. */
   testMode: boolean;
+  /** Installed version, and where new releases are announced (GitHub releases API format). */
+  version: string;
+  releasesUrl: string;
+  /** Image of this very daemon (the updater derives the registry from it) and the host directory holding apply.sh. */
+  daemonImage: string;
+  hostOptDir: string;
 }
 
 export const DEFAULT_REDIRECT_ALLOW = [
@@ -82,6 +88,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, o: { needSecret
     apiKey: env.ANTHROPIC_API_KEY || null,
     oauthRedirectAllow: [...DEFAULT_REDIRECT_ALLOW, ...extra],
     testMode: env.BIVOUAC_TEST_MODE === '1',
+    version: env.BIVOUAC_VERSION ?? 'dev',
+    releasesUrl: env.BIVOUAC_RELEASES_URL ?? 'https://api.github.com/repos/harijoe/bivouac/releases?per_page=30',
+    daemonImage: env.BIVOUAC_DAEMON_IMAGE ?? '',
+    hostOptDir: env.BIVOUAC_HOST_OPT_DIR ?? '/opt/bivouac',
   };
 }
 

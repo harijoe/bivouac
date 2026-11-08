@@ -42,6 +42,17 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
 
   app.get('/api/totals', (c) => c.json(store.totals()));
 
+  // ---- updates (administrators only; everybody sees the installed version in /api/settings)
+  app.get('/api/update', run((c) => { admin(c); return c.json(ctx.updates.status()); }));
+  app.post('/api/update/check', run(async (c) => { admin(c); await ctx.updates.check(); return c.json(ctx.updates.status()); }));
+  app.post('/api/update/start', run(async (c) => {
+    admin(c);
+    const b = await c.req.json().catch(() => ({}));
+    try { return c.json(await ctx.updates.start(b.mode === 'now' ? 'now' : 'idle', actorOf(c).label)); } catch (e: any) { throw new UserError(String(e?.message ?? e), 'update_failed', 409); }
+  }));
+  app.delete('/api/update/schedule', run((c) => { admin(c); ctx.updates.cancelSchedule(actorOf(c).label); return c.json({ ok: true }); }));
+  app.put('/api/update/auto', run(async (c) => { admin(c); const b = await c.req.json().catch(() => ({})); ctx.updates.setAuto(b.enabled === true, actorOf(c).label); return c.json(ctx.updates.status()); }));
+
   // ---- projects
   app.get('/api/projects', (c) => c.json(svc.listProjects()));
   app.get('/api/github/repos', run(async (c) => {
@@ -128,7 +139,7 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   app.get('/api/settings', run((c) => {
     const isAdmin = c.get('user')!.role === 'admin';
     return c.json({
-      admin: isAdmin, baseUrl: baseUrl(cfg), domain: cfg.domain, sslip: cfg.domain.endsWith('.sslip.io'), publicIp: ctx.publicIp, mcpUrl: `${baseUrl(cfg)}/mcp`, version: process.env.BIVOUAC_VERSION ?? 'dev',
+      admin: isAdmin, baseUrl: baseUrl(cfg), domain: cfg.domain, sslip: cfg.domain.endsWith('.sslip.io'), publicIp: ctx.publicIp, mcpUrl: `${baseUrl(cfg)}/mcp`, version: cfg.version,
       claude: svc.claudeStatus(),
       github: { configured: ctx.gh.configured, slug: ctx.gh.creds?.slug ?? null, installUrl: ctx.gh.installUrl(), appUrl: ctx.gh.creds?.htmlUrl ?? null },
       budgets: { maxIterations: Number(store.getSetting('default_max_iterations') ?? 0) || null, maxCostUsd: Number(store.getSetting('default_max_cost_usd') ?? 0) || null },

@@ -62,7 +62,8 @@ export class TaskManager {
     const t = this.store.getTask(id);
     if (!t) throw new Error('no such task');
     if (!a) {
-      if (t.status === 'queued') this.store.setStatus(id, 'stopped');
+      // queued, or left in a running state by a crash: nothing is running for it, so it is simply stopped
+      if (['queued', 'starting', 'running', 'checking'].includes(t.status)) this.store.setStatus(id, 'stopped');
       return;
     }
     a.stop = true;

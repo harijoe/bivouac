@@ -19,6 +19,8 @@ export class ExecutorClient {
   loginGet(id: string) { return this.call<LoginSession>('GET', `/claude-login/${id}`); }
   loginInput(id: string, text: string) { return this.call('POST', `/claude-login/${id}/input`, { text }); }
   loginCancel(id: string) { return this.call('DELETE', `/claude-login/${id}`); }
+  updateStart(version: string) { return this.call('POST', '/update/start', { version }); }
+  async updateRunning() { return (await this.call<{ running: boolean }>('GET', '/update/running')).running; }
   async healthy() { try { return (await fetch(this.baseUrl + '/health')).ok; } catch { return false; } }
 }
 

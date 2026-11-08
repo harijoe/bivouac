@@ -8,6 +8,7 @@ import type { Previews } from './preview.js';
 import type { TaskManager } from './runner.js';
 import type { Service } from './service.js';
 import type { LoginSession } from './executor.js';
+import type { Updates } from './updates.js';
 
 /** What the web service needs from the executor for the Claude sign-in; implemented over HTTP in production and locally in tests. */
 export interface LoginClient {
@@ -26,6 +27,7 @@ export interface Ctx {
   gh: GithubApp;
   oauth: OAuthServer;
   previews: Previews;
+  updates: Updates;
   limiter: RateLimiter;
   login: LoginClient | null;
   /** Public IPv4 of the server (DNS instructions in the setup wizard). */

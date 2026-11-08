@@ -31,7 +31,7 @@ export function makeCfg(overrides: Partial<DaemonConfig> = {}): DaemonConfig {
     dataDir, port: 0, internalPort: 0, bind: '127.0.0.1', namePrefix: 'bivouac-dev', taskImage: 'x', claudeBin: FAKE_CLAUDE,
     domain: '1-2-3-4.sslip.io', previewScheme: 'https', previewPort: 443, traefikContainer: 'bivouac-dev-traefik', webHost: 'bivouac-dev-web', certResolver: null,
     maxParallel: 4, taskUid: 1000, dashboardDir: null, secretKey: randomBytes(32), executorUrl: null, executorToken: 'xt',
-    oauthToken: 'sk-ant-oat01-test', apiKey: null, oauthRedirectAllow: ['https://claude.ai/*', 'https://chatgpt.com/*', 'http://localhost:*/*', 'http://127.0.0.1:*/*'], testMode: true, ...overrides,
+    oauthToken: 'sk-ant-oat01-test', apiKey: null, oauthRedirectAllow: ['https://claude.ai/*', 'https://chatgpt.com/*', 'http://localhost:*/*', 'http://127.0.0.1:*/*'], testMode: true, version: '0.2.0', releasesUrl: 'http://releases.test/releases', daemonImage: 'ghcr.io/x/bivouac-daemon:0.2.0', hostOptDir: '/opt/bivouac', ...overrides,
   };
 }
 

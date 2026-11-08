@@ -8,12 +8,15 @@ import { OAuthServer } from './oauth.js';
 import { Previews } from './preview.js';
 import { TaskManager, type SandboxFactory } from './runner.js';
 import { Service } from './service.js';
+import { Updates, type UpdateClient } from './updates.js';
 
 export interface BuildOpts {
   cfg: DaemonConfig;
   store: Store;
   makeSandbox: SandboxFactory;
   login?: LoginClient | null;
+  update?: UpdateClient | null;
+  now?: () => Date;
   fetchImpl?: typeof fetch;
   publicIp?: string | null;
   resolve4?: (host: string) => Promise<string[]>;
@@ -30,9 +33,11 @@ export function buildContext(o: BuildOpts): Ctx {
   const mgr = new TaskManager(store, cfg, o.makeSandbox, (p, access) => ref.svc!.repoToken(p, access), o.fetchImpl);
   const svc = new Service(store, cfg, mgr, auth, gh, previews);
   ref.svc = svc;
+  const updates = new Updates(store, cfg, mgr, auth, o.update ?? null, o.fetchImpl ?? fetch, o.now);
+  svc.updates = updates;
   const oauth = new OAuthServer(store, () => cfg.oauthRedirectAllow);
   return {
-    cfg, store, mgr, svc, auth, gh, oauth, previews, limiter: new RateLimiter(), login: o.login ?? null,
+    cfg, store, mgr, svc, auth, gh, oauth, previews, updates, limiter: new RateLimiter(), login: o.login ?? null,
     publicIp: o.publicIp ?? process.env.BIVOUAC_PUBLIC_IP ?? null, resolve4: o.resolve4 ?? ((h) => dns.resolve4(h)),
   };
 }

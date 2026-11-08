@@ -131,6 +131,31 @@ export function createExecutorApp(cfg: DaemonConfig, docker: Dockerode, login: L
   app.get('/sandboxes/:id/file', wrap(async (c) => c.json({ content: await sb(c).readFile(c.req.query('path') ?? '') })));
   app.put('/sandboxes/:id/file', wrap(async (c) => { const b = await c.req.json(); await sb(c).writeFile(String(b.path), String(b.content)); return c.json({ ok: true }); }));
 
+  // One-click update: an ephemeral updater container runs the *new* version's apply.sh on the host (see decisions.md).
+  const updaterName = `${cfg.namePrefix}-updater`;
+  app.get('/update/running', wrap(async (c) => c.json({ running: await docker.getContainer(updaterName).inspect().then((i) => i.State.Running, () => false) })));
+  app.post('/update/start', wrap(async (c) => {
+    const b = await c.req.json();
+    const version = String(b.version ?? '');
+    if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('bad version');
+    const m = /^(.+)\/bivouac-daemon:[^/]+$/.exec(cfg.daemonImage);
+    if (!m) throw new Error('this installation does not know its image registry: update with the installer instead');
+    if (await docker.getContainer(updaterName).inspect().then((i) => i.State.Running, () => false)) throw new Error('an update is already running');
+    await docker.getContainer(updaterName).remove({ force: true }).catch(() => {});
+    const image = `${m[1]}/bivouac-daemon:${version}`;
+    await new Promise<void>((resolve, reject) => docker.pull(image, (err: Error | null, st: NodeJS.ReadableStream) => {
+      if (err) return reject(new Error(`cannot download ${image}: ${err.message}`));
+      docker.modem.followProgress(st, (e: Error | null) => (e ? reject(new Error(`cannot download ${image}: ${e.message}`)) : resolve()));
+    }));
+    const c2 = await docker.createContainer({
+      name: updaterName, Image: image, Entrypoint: ['sh', '-c'], Labels: { 'bivouac.managed': 'true', 'bivouac.updater': 'true' }, Env: [`V=${version}`],
+      Cmd: ['cp /app/apply.sh /host-opt/apply.sh && cp /app/uninstall.sh /host-opt/uninstall.sh && chmod 755 /host-opt/apply.sh /host-opt/uninstall.sh && exec nsenter -t 1 -m -u -i -n -p -- /opt/bivouac/apply.sh update "$V"'],
+      HostConfig: { Privileged: true, PidMode: 'host', AutoRemove: true, Binds: [`${cfg.hostOptDir}:/host-opt`] },
+    });
+    await c2.start();
+    return c.json({ ok: true });
+  }));
+
   app.post('/claude-login', wrap(async (c) => c.json(await login.start())));
   app.get('/claude-login/:id', wrap(async (c) => { const s = login.get(c.req.param('id')); return s ? c.json(s) : c.json({ error: 'no such login session' }, 404); }));
   app.post('/claude-login/:id/input', wrap(async (c) => { const b = await c.req.json(); await login.input(c.req.param('id'), String(b.text ?? '')); return c.json({ ok: true }); }));
