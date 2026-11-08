@@ -1,0 +1,5 @@
+# bivouac 0.2 format (single dev.port): must keep working
+dev:
+  command: node server.mjs
+  port: 5173
+success: "true"
