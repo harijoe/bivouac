@@ -182,7 +182,8 @@ client context
 say "STEP 14: cleanup leaves nothing behind"
 client cleanup
 sleep 3
-expect_ok "no task container, sidecar, network or volume of the deleted tasks remains" "! docker ps -a --format '{{.Names}}' | grep -q '^bivouac-task-' && ! docker network ls --format '{{.Name}}' | grep -q '^bivouac-task-' && [ -z \"\$(docker volume ls -q --filter label=bivouac.managed=true)\" ]"
+IDS="$A|$B|$G"
+expect_ok "no container, sidecar, network or volume of the deleted tasks remains" "! docker ps -a --format '{{.Names}}' | grep -Eq '^bivouac-task-($IDS)(-|\$)' && ! docker network ls --format '{{.Name}}' | grep -Eq '^bivouac-task-($IDS)\$' && [ -z \"\$(docker volume ls -q --filter label=bivouac.task=$A --filter label=bivouac.task=$B)\" ] && [ -z \"\$(docker volume ls -q --filter label=bivouac.task=$G)\" ] && ! ip -o link | grep -Eq ' bvt($IDS):'"
 
 say "STEP 15: re-running the installer is idempotent, uninstall removes the firewall"
 if [ "$MODE" = local ]; then SSHR "cd /root/src && BIVOUAC_SOURCE_DIR=/root/src BIVOUAC_VERSION=0.3.4 BIVOUAC_REGISTRY=bivouac-local bash install.sh >/dev/null 2>&1"; fi
