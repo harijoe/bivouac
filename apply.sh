@@ -243,18 +243,19 @@ pull_images() {
 restore() { # $1 = backup dir
   local dir="$1"
   log "Rolling back to the previous version"
-  docker compose -f "$OPT/docker-compose.yml" stop web executor >/dev/null 2>&1 || true
+  ( cd "$OPT" && docker compose stop web executor ) || true
   cp -a "$dir/bivouac.env" "$ENV_FILE"
   rm -rf "$DATA/web.failed"; mv "$DATA/web" "$DATA/web.failed" 2>/dev/null || true
   cp -a "$dir/web" "$DATA/web"
   [ -f "$dir/docker-compose.yml" ] && cp -a "$dir/docker-compose.yml" "$OPT/docker-compose.yml"
   [ -f "$dir/bivouac.service" ] && cp -a "$dir/bivouac.service" /etc/systemd/system/bivouac.service && systemctl daemon-reload
-  ( cd "$OPT" && docker compose up -d --remove-orphans >/dev/null 2>&1 ) || true
+  ( cd "$OPT" && docker compose up -d --remove-orphans ) || true
   rm -rf "$DATA/web.failed"
 }
 
+NEW_VERSION=""
 deploy() {
-  local target; target="$(env_get BIVOUAC_VERSION)"
+  local target; target="${NEW_VERSION:-$(env_get BIVOUAC_VERSION)}"
   TO_VERSION="$target"
   local previous=0
   docker inspect bivouac-web >/dev/null 2>&1 && previous=1
@@ -262,6 +263,13 @@ deploy() {
   write_status running backup
   local bdir=""
   if [ "$previous" = 1 ]; then log "Backing up the database and the configuration"; bdir="$(backup)"; fi
+  if [ -n "$NEW_VERSION" ]; then
+    # only now: the backup above must hold the configuration of the version that is running
+    local registry; registry="$(env_get BIVOUAC_DAEMON_IMAGE)"; registry="${registry%/bivouac-daemon:*}"
+    env_set BIVOUAC_VERSION "$NEW_VERSION"
+    env_set BIVOUAC_DAEMON_IMAGE "$registry/bivouac-daemon:$NEW_VERSION"
+    env_set BIVOUAC_TASK_IMAGE "$registry/bivouac-task:$NEW_VERSION"
+  fi
   write_status running pull
   pull_images || { [ "$previous" = 1 ] && { restore "$bdir"; wait_healthy "$FROM_VERSION" || true; write_status rolled_back pull "Could not download the new images. The previous version is running again."; exit 1; }; write_status failed pull "Could not download the images."; exit 1; }
   write_status running configure
@@ -295,10 +303,7 @@ case "${1:-}" in
   update)
     new="${2:?usage: apply.sh update <version>}"
     [[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad version: $new" >&2; exit 2; }
-    registry="$(env_get BIVOUAC_DAEMON_IMAGE)"; registry="${registry%/bivouac-daemon:*}"
-    env_set BIVOUAC_VERSION "$new"
-    env_set BIVOUAC_DAEMON_IMAGE "$registry/bivouac-daemon:$new"
-    env_set BIVOUAC_TASK_IMAGE "$registry/bivouac-task:$new"
+    NEW_VERSION="$new"
     deploy ;;
   render) render; render_extra ;;
   *) echo "usage: apply.sh deploy | update <version> | render" >&2; exit 2 ;;
