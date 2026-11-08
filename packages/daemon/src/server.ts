@@ -13,7 +13,6 @@ import { apiRoutes } from './routes-api.js';
 import { setupRoutes } from './routes-setup.js';
 import { buildTraefikConfig } from './routes.js';
 
-export const VERSION = process.env.BIVOUAC_VERSION ?? 'dev';
 
 export const sessionCookieName = (ctx: Ctx) => (ctx.cfg.previewScheme === 'https' ? '__Host-bv_session' : 'bv_session');
 export function setSessionCookie(ctx: Ctx, c: C, id: string) {
@@ -48,13 +47,13 @@ export function createApp(ctx: Ctx) {
     await next();
   });
 
-  app.get('/api/health', (c) => c.json({ ok: true, version: VERSION }));
+  app.get('/api/health', (c) => c.json({ ok: true, version: cfg.version }));
 
   // ---- login / session
   app.get('/api/session', (c) => {
     const u = c.get('user');
     return c.json({
-      user: u, version: VERSION, domain: cfg.domain, baseUrl: baseUrl(cfg), githubReady: ctx.gh.configured,
+      user: u, version: cfg.version, domain: cfg.domain, baseUrl: baseUrl(cfg), githubReady: ctx.gh.configured,
       setupOpen: auth.setupOpen(), base: baseUrl(cfg), mcpUrl: `${baseUrl(cfg)}/mcp`,
     });
   });

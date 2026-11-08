@@ -90,7 +90,9 @@ function Shares({ task, shares, reload }: { task: TaskView; shares: Share[]; rel
       {active.length === 0 && <p className="muted">No active links.</p>}
       {active.map((s) => (
         <div key={s.id} className="share">
-          <CopyField value={s.url ?? ''} label={s.expiresAt ? `Expires ${new Date(s.expiresAt * 1000).toLocaleString()}` : 'No expiry'} />
+          {(s.urls?.length ?? 0) > 1
+            ? s.urls!.map((u) => <CopyField key={u.name} value={u.url} label={`${u.name}${s.expiresAt ? ` · expires ${new Date(s.expiresAt * 1000).toLocaleString()}` : ' · no expiry'}`} />)
+            : <CopyField value={s.url ?? ''} label={s.expiresAt ? `Expires ${new Date(s.expiresAt * 1000).toLocaleString()}` : 'No expiry'} />}
           <Button variant="ghost" onClick={() => a.run(async () => { await api('DELETE', `/api/tasks/${task.id}/shares/${s.id}`); reload(); })}>Revoke</Button>
         </div>
       ))}
@@ -131,9 +133,9 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
   if (missing) return <div className="empty"><p className="empty-title">This task does not exist (anymore)</p><p className="muted">It may have been renamed or deleted.</p><Link to="/" className="btn primary">Back to tasks</Link></div>;
   if (!task) return <Spinner />;
 
-  const openPreview = () => act.run(async () => {
+  const openPreview = (port?: string) => act.run(async () => {
     const w = window.open('', '_blank');
-    try { const r = await api('POST', `/api/tasks/${task.id}/preview-link`); if (w) w.location.href = r.url; else location.href = r.url; } catch (e) { w?.close(); throw e; }
+    try { const r = await api('POST', `/api/tasks/${task.id}/preview-link`, port ? { port } : {}); if (w) w.location.href = r.url; else location.href = r.url; } catch (e) { w?.close(); throw e; }
   });
   const post = (p: string, body?: unknown) => act.run(async () => { await api('POST', `/api/tasks/${task.id}/${p}`, body ?? {}); await reload(); });
   const lastCheck = [...events].reverse().find((e) => e.kind === 'check');
@@ -149,7 +151,8 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
       </header>
 
       <div className="actions">
-        {task.devPort && <Button variant="primary" onClick={openPreview} busy={act.busy}>Open preview ↗</Button>}
+        {task.devPort && <Button variant="primary" onClick={() => openPreview()} busy={act.busy}>Open preview ↗</Button>}
+        {task.ports.filter((p) => !p.primary).map((p) => <Button key={p.name} onClick={() => openPreview(p.name)} busy={act.busy}>Open {p.name} ↗</Button>)}
         {active ? <Button variant="danger" onClick={() => post('stop')}>Stop</Button> : task.status !== 'succeeded' && <Button onClick={() => post('resume')}>Resume</Button>}
       </div>
       <ErrorNote>{act.error}</ErrorNote>
@@ -159,6 +162,7 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
           {claudeProblem ? <>Your Claude connection has a problem: {task.error} <Link to="/settings#claude">Reconnect Claude</Link></> : task.error}
         </p>
       )}
+      {task.configError && <p className="note warn" role="alert">The <code>bivouac.yml</code> in this branch has a problem, so the previous settings are still used: {task.configError}</p>}
       {task.prUrl && <p className="note ok"><a href={task.prUrl} target="_blank" rel="noreferrer">View the pull request ↗</a></p>}
 
       <section className="card">
@@ -183,7 +187,9 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
           <dt>Success command</dt><dd><code>{task.successCommand}</code></dd>
           <dt>Tokens</dt><dd>{fmtTok(totalTokens(task.usage))}</dd>
           <dt>Created</dt><dd>{ago(task.createdAt, now)}</dd>
-          <dt>Preview address</dt><dd className="clip">{task.previewUrl}</dd>
+          <dt>{task.ports.length > 1 ? 'Addresses' : 'Preview address'}</dt>
+          <dd className="clip">{task.ports.length > 1 ? task.ports.map((p) => <div key={p.name}><b>{p.name}</b> <span className="muted">(port {p.port})</span><br />{p.url}</div>) : task.previewUrl}</dd>
+          {task.services.length > 0 && <><dt>Services</dt><dd>{task.services.map((x) => <div key={x.name}><b>{x.name}</b> <span className="muted">{x.image}</span></div>)}</dd></>}
         </dl>
         <div className="actions">
           <Button onClick={() => post('push')}>{task.pushed ? 'Push again' : 'Push branch to GitHub'}</Button>

@@ -25,6 +25,7 @@ const screens = [
   { name: 'home', path: '/' },
   { name: 'task', path: `/projects/${dark.projectName}/${dark.name}`, settle: 2500 },
   { name: 'settings', path: '/settings', full: true },
+  { name: 'update', path: '/update' },
   { name: 'connect', path: '/connect' },
   { name: 'authorize', path: authorizeUrl },
   { name: 'setup-domain', path: setupLink, anon: true },
@@ -36,7 +37,7 @@ const report = [];
 for (const scheme of ['light', 'dark']) {
   for (const [sizeName, viewport] of Object.entries(sizes)) {
     for (const s of screens) {
-      if (scheme === 'dark' && !['home', 'task', 'settings'].includes(s.name)) continue;
+      if (scheme === 'dark' && !['home', 'task', 'settings', 'update'].includes(s.name)) continue;
       const ctx = await browser.newContext({ viewport, colorScheme: scheme, deviceScaleFactor: 1, baseURL: base });
       if (!s.anon) { const [k, v] = cookie.split('='); await ctx.addCookies([{ name: k, value: v, url: base }]); }
       const page = await ctx.newPage();

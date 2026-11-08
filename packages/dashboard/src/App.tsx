@@ -4,6 +4,7 @@ import { Authorize, Login } from './pages/auth';
 import { Home } from './pages/home';
 import { ConnectPage, Settings } from './pages/settings';
 import { Setup } from './pages/setup';
+import { UpdateBanner, UpdatePage } from './pages/update';
 import { TaskPage } from './pages/task';
 import { Link, navigate, Spinner, useLocation, useTheme } from './ui';
 
@@ -60,12 +61,14 @@ export function App() {
   else if (!session.user) page = <Spinner />;
   else if (path === '/oauth/authorize') page = <Authorize />;
   else if (path === '/settings') page = <Settings />;
+  else if (path === '/update' && session.user.role === 'admin') page = <UpdatePage loadedVersion={session.version} />;
   else if (path === '/connect') page = <ConnectPage mcpUrl={session.mcpUrl} />;
   else if (m) page = <TaskPage key={m[1] + m[2]} project={decodeURIComponent(m[1])} name={decodeURIComponent(m[2])} />;
   else page = <Home session={session} />;
   return (
     <div className="shell">
       <Header session={session} />
+      {session.user?.role === 'admin' && path !== '/update' && path !== '/setup' && path !== '/oauth/authorize' && <UpdateBanner enabled />}
       <main>{page}</main>
       <footer className="foot muted">bivouac {session.version}</footer>
     </div>

@@ -97,7 +97,7 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     return c.json(view(t));
   }));
   app.get('/api/tasks/:id', run((c) => c.json({ ...view(taskOf(c)), shares: shareList(taskOf(c)) })));
-  const shareList = (t: Task) => previews.listShares(t.id).map((s) => ({ ...s, url: s.active ? svc.shareUrl(t, previews.shareToken(s.id) ?? '') : null }));
+  const shareList = (t: Task) => previews.listShares(t.id).map((s) => ({ ...s, url: s.active ? svc.shareUrl(t, previews.shareToken(s.id) ?? '') : null, urls: s.active ? svc.shareUrls(t, previews.shareToken(s.id) ?? '') : [] }));
   app.get('/api/tasks/:id/events', run((c) => c.json(store.listEvents(taskOf(c).id, Number(c.req.query('after') ?? 0)))));
   app.get('/api/tasks/:id/devlogs', run(async (c) => c.json({ text: await ctx.mgr.devLogs(taskOf(c).id, Number(c.req.query('lines') ?? 200)) })));
   app.post('/api/tasks/:id/stop', run(async (c) => c.json(view(await svc.stopTask(taskOf(c), actorOf(c))))));

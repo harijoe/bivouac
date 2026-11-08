@@ -22,6 +22,7 @@ const cfg = {
   domain: 'demo.example.com', previewScheme: 'http', previewPort: port, traefikContainer: 'x', webHost: 'x', certResolver: null, maxParallel: 4, taskUid: 1000,
   dashboardDir: path.join(root, 'packages/dashboard/dist'), secretKey: key, executorUrl: null, executorToken: 'x', oauthToken: 'sk-ant-oat01-demo', apiKey: null,
   oauthRedirectAllow: ['https://claude.ai/*'], testMode: true,
+  version: '0.2.0', releasesUrl: 'http://127.0.0.1:1/none', daemonImage: '', hostOptDir: '/opt/bivouac',
 };
 const store = new Store(path.join(dataDir, 'demo.db'), key);
 const sandboxes = new Map();
@@ -50,8 +51,11 @@ const sid = ctx.auth.createSession(1, 'test');
 
 const remote = mkdtempSync(path.join(tmpdir(), 'bv-demo-remote-'));
 writeFileSync(path.join(remote, 'README.md'), 'demo\n');
+writeFileSync(path.join(remote, 'bivouac.yml'), 'ports:\n  web: 5173\n  api: 3000\nservices:\n  postgres:\n    image: postgres:16\n    env: { POSTGRES_PASSWORD: dev }\n');
 execSync('git init -q -b main && git add -A && git -c user.name=t -c user.email=t@t commit -qm init', { cwd: remote });
 const dev = { dev: { command: 'echo "VITE ready in 312 ms"; sleep 1000', port: 5173 } };
+store.setSetting('update_latest', JSON.stringify({ version: '0.3.0', name: 'v0.3.0', url: 'https://github.com/harijoe/bivouac/releases/tag/v0.3.0', publishedAt: new Date(Date.now() - 3600e3).toISOString(), notes: '## 0.3.0\n\n### Added\n- **Update from the dashboard** in one click, with backup and automatic rollback.\n- Several ports per project and `postgres` / `redis` services next to each task.\n- A `get_project_context` tool to plan the next mission from your chat.\n\n### Changed\n- Tasks can no longer reach the host machine.' }));
+store.setSetting('update_checked_at', new Date().toISOString());
 store.createProject({ name: 'mon-app', repoUrl: remote, defaultBranch: 'main', config: dev, githubRepo: 'julien/mon-app', installationId: 1 });
 store.createProject({ name: 'api-gateway', repoUrl: remote, defaultBranch: 'main', config: dev, githubRepo: 'julien/api-gateway', installationId: 1 });
 const p = store.getProjectByName('mon-app');

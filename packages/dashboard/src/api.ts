@@ -2,7 +2,7 @@ import type { Project, Task, TaskEvent, Usage } from '@bivouac/shared';
 
 export type ProjectWithTotals = Project & { totals: Usage & { tasks: number } };
 export type TaskView = Task & { dashboardUrl: string; pendingInstructions?: number; active?: boolean; shares?: Share[] };
-export interface Share { id: number; createdAt: number; expiresAt: number | null; revoked: boolean; active: boolean; url: string | null }
+export interface Share { id: number; createdAt: number; expiresAt: number | null; revoked: boolean; active: boolean; url: string | null; urls?: { name: string; url: string }[] }
 export interface Session {
   user: { githubId: number; login: string; name: string | null; avatarUrl: string | null; role: 'admin' | 'user' } | null;
   version: string; domain: string; baseUrl: string; githubReady: boolean; setupOpen: boolean; mcpUrl: string;
@@ -37,4 +37,11 @@ export function duration(start: string | null, end: string | null, now = Date.no
   if (s >= 3600) return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
   if (s >= 60) return `${Math.floor(s / 60)} min`;
   return `${s} s`;
+}
+
+export interface UpdateStatus {
+  current: string; checkedAt: string | null; error: string | null; auto: boolean; runningTasks: number; canUpdate: boolean;
+  available: { version: string; name: string; notes: string; url: string; publishedAt: string | null } | null;
+  scheduled: { version: string; by: string; at: string } | null;
+  progress: { state: 'running' | 'done' | 'failed' | 'rolled_back'; step: string; steps: string[]; from: string; to: string; error: string | null; startedAt: string; finishedAt: string | null } | null;
 }

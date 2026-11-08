@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ago, type ProjectWithTotals } from '../api';
 import { Button, Details, ErrorNote, Spinner, useAsync, navigate } from '../ui';
 import { ChatConnect, ClaudeConnect, claudeSummary } from './connect';
+import { VersionSection } from './update';
 
 interface SettingsData {
   admin: boolean; baseUrl: string; domain: string; sslip: boolean; publicIp: string | null; mcpUrl: string; version: string;
@@ -199,6 +200,7 @@ export function Settings() {
       <Section id="github" title="GitHub">
         {s.github.configured ? <p>Connected through your private app <b>{s.github.slug}</b>. {s.github.appUrl && <a href={s.github.appUrl} target="_blank" rel="noreferrer">Manage on GitHub</a>}</p> : <p className="note error">GitHub is not connected. Run <code>sudo bivouac reset-admin</code> on the server and follow the link.</p>}
       </Section>
+      {s.admin && <VersionSection version={s.version} />}
       {s.admin && <Activity />}
     </>
   );
