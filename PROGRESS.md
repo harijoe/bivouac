@@ -68,3 +68,10 @@ Tous les points sont vérifiés.
 See docs/decisions.md.
 
 MISSION_V02_TERMINEE
+
+## Fix CI (flaky encryption test)
+- `packages/daemon/test/misc.test.ts`: the ciphertext is now checked against the full plaintext secret instead of the 3-letter `ghp` (which random base64 could contain). Encryption code untouched.
+- Audited the other tests: remaining `not.toContain` checks use long or non-base64 strings (hex hashes, `PRIVATE KEY`, 40-char tokens), so no other change was needed.
+- CI on 4330ede verified through the Actions API (run 42427478913): test, integration and images all `success`.
+
+MISSION_FIXCI_TERMINEE
