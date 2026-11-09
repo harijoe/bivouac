@@ -10,7 +10,23 @@ const CONF = `${DIR}/dev.json`;
 const LOG = `${DIR}/dev.log`;
 mkdirSync(DIR, { recursive: true });
 const log = createWriteStream(LOG, { flags: 'a' });
-const say = (m) => log.write(`[supervisor ${new Date().toISOString()}] ${m}\n`);
+// Every line gets its time (HH:MM:SS.mmm, UTC) so the dashboard can show it; the agent reads the same file.
+const stamp = () => new Date().toISOString().slice(11, 23);
+const say = (m) => log.write(`${stamp()} [supervisor] ${m}\n`);
+/** Splits a stream into lines and writes each with its time; a partial line is flushed after a short pause. */
+function stampLines(stream) {
+  let rest = '', timer = null;
+  const flush = () => { timer = null; if (rest) { log.write(`${stamp()} ${rest}\n`); rest = ''; } };
+  stream.setEncoding('utf8');
+  stream.on('data', (chunk) => {
+    const parts = (rest + chunk).split('\n');
+    rest = parts.pop();
+    for (const l of parts) log.write(`${stamp()} ${l.replace(/\r$/, '')}\n`);
+    clearTimeout(timer);
+    if (rest) timer = setTimeout(flush, 300);
+  });
+  stream.on('end', () => { clearTimeout(timer); flush(); });
+}
 
 let child = null;
 let stopping = false;
@@ -24,8 +40,8 @@ function start() {
   say(`starting: ${conf.command} (cwd ${conf.cwd})`);
   child = spawn('bash', ['-lc', conf.command], { cwd: conf.cwd, env: { ...process.env, PORT: String(conf.port), HOST: '0.0.0.0' }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const startedAt = Date.now();
-  child.stdout.pipe(log, { end: false });
-  child.stderr.pipe(log, { end: false });
+  stampLines(child.stdout);
+  stampLines(child.stderr);
   child.on('exit', (code, sig) => {
     child = null;
     say(`dev server exited (code=${code} signal=${sig})`);

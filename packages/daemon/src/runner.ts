@@ -7,6 +7,7 @@ import { previewUrl } from './routes.js';
 import { buildInitialPrompt, buildInstructionPrompt, buildRetryPrompt, describeEnvironment } from './prompt.js';
 import type { Sandbox } from './sandbox.js';
 import type { Project } from '@bivouac/shared';
+import { claudeEnv, resolveClaude } from './accounts.js';
 import { describeRuntime, detectRuntime, miseConfig, RUNTIME_FILES, runtimeKey, type RuntimeSpec } from './runtime.js';
 
 export type SandboxFactory = (task: Task) => Sandbox;
@@ -135,6 +136,9 @@ export class TaskManager {
     return url;
   }
 
+  /** The sandbox of a task (read-only uses: logs). */
+  sandboxFor(t: Task): Sandbox { return this.makeSandbox(t); }
+
   async devLogs(id: number, lines = 200): Promise<string> {
     const t = this.store.getTask(id);
     if (!t) return '';
@@ -172,17 +176,14 @@ export class TaskManager {
     this.store.patchTask(t.id, { liveConfig: live, ...(ports[0] ? { devPort: ports[0].port } : {}) });
     return eff;
   }
-  private authEnv(): Record<string, string> {
-    const oauth = this.store.getSecretSetting('claude_oauth_token') ?? this.cfg.oauthToken;
-    const key = this.store.getSecretSetting('anthropic_api_key') ?? this.cfg.apiKey;
-    return { ...(oauth ? { CLAUDE_CODE_OAUTH_TOKEN: oauth } : {}), ...(key ? { ANTHROPIC_API_KEY: key } : {}) };
-  }
+  /** The account is resolved at every agent session: a project's change of account applies to the next attempt. */
+  private claudeFor(projectId: number) { return resolveClaude(this.store, this.cfg, projectId); }
   /** Output sink: batches chunks into 'system' events so the dashboard can follow long commands. */
   private sink(id: number, label: string) {
     let buf = '';
     let all = '';
     let timer: NodeJS.Timeout | null = null;
-    const flush = () => { timer = null; if (buf) { this.store.addEvent(id, 'system', { subtype: 'output', label, text: truncateOutput(buf, 3000) }); buf = ''; } };
+    const flush = () => { timer = null; if (buf) { this.store.addEvent(id, 'system', { subtype: 'output', label, text: truncateOutput(buf, 60000) }); buf = ''; } };
     return {
       push: (s: string) => { buf += s; all += s; if (all.length > 400_000) all = all.slice(-200_000); if (!timer) timer = setTimeout(flush, 500); },
       end: () => { if (timer) clearTimeout(timer); flush(); return all; },
@@ -356,10 +357,13 @@ export class TaskManager {
         if (ev.result) result = ev.result;
       }
     };
+    const account = this.claudeFor(task.projectId);
+    if (account && task.accountName !== account.name) this.store.patchTask(id, { accountName: account.name });
+    const accountNote = account ? ` (Claude account “${account.name}”)` : '';
     const args = [this.cfg.claudeBin, '-p', prompt, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--max-budget-usd', remaining.toFixed(4)];
     if (task.sessionId) args.push('--resume', task.sessionId);
     const code = await sb.exec(args, {
-      cwd: path.join(sb.ws, 'repo'), env: this.authEnv(), signal: a.abort.signal,
+      cwd: path.join(sb.ws, 'repo'), env: claudeEnv(account), signal: a.abort.signal,
       onData: (chunk, stream) => { if (stream === 'stdout') split.push(chunk).forEach(handle); else stderr.push(chunk); },
     });
     split.flush().forEach(handle);
@@ -367,8 +371,8 @@ export class TaskManager {
     if (a.stop) return { outcome: 'ok' };
     if (tokenAbort) return { outcome: 'budget' };
     if (result?.subtype === 'error_max_budget_usd') return { outcome: 'budget' };
-    if (!result) return { outcome: 'failed', error: `claude exited with code ${code} without a result. ${truncateOutput(stderr.join(''), 1500)}` };
-    if (result.isError && result.subtype !== 'error_max_turns') return { outcome: 'failed', error: `claude reported an error (${result.subtype}): ${truncateOutput(result.text, 1500)}` };
+    if (!result) return { outcome: 'failed', error: `claude${accountNote} exited with code ${code} without a result. ${truncateOutput(stderr.join(''), 1500)}` };
+    if (result.isError && result.subtype !== 'error_max_turns') return { outcome: 'failed', error: `claude${accountNote} reported an error (${result.subtype}): ${truncateOutput(result.text, 1500)}` };
     return { outcome: 'ok' };
   }
 }

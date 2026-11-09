@@ -28,6 +28,8 @@ if (argv[0] === 'setup-token') {
     process.stdout.write("\r\nOAuth error: That code wasn't accepted. It may be incomplete, expired, already used, or from an earlier sign-in attempt. Sign in again to get a new code.\r\n\r\nPress Enter to retry.\r\n");
     typed = '';
   };
+  // like Ink: raw mode, so that text and Enter arrive as the separate writes they were sent as (a cooked TTY would join them)
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
   process.stdin.on('data', (b) => {
     const t = b.toString();
     if (/^[\r\n]+$/.test(t)) { if (typed) finish(); return; }
@@ -50,6 +52,7 @@ state.runs += 1;
 const sessionId = resume || state.sessionId;
 writeFileSync(statePath, JSON.stringify(state));
 appendFileSync(`${stateDir}/fake-prompts.log`, `=== run ${state.runs} resume=${resume ?? ''}\n${prompt}\n`);
+appendFileSync(`${stateDir}/fake-auth.log`, `${process.env.ANTHROPIC_API_KEY ? 'apikey:' + process.env.ANTHROPIC_API_KEY : ''}${process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'oauth:' + process.env.CLAUDE_CODE_OAUTH_TOKEN : ''}\n`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const emit = async (o) => { console.log(JSON.stringify({ ...o, session_id: sessionId })); if (state.delay) await sleep(state.delay); };
 const usage = (i, o) => ({ input_tokens: i, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: o, service_tier: 'standard' });

@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { EventEmitter } from 'node:events';
-import { emptyUsage, TERMINAL_STATUSES, type PortDef, type ServiceConfig, type EventKind, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Usage } from '@bivouac/shared';
+import { emptyUsage, TERMINAL_STATUSES, type PortDef, type ServiceConfig, type EventKind, type ClaudeAccount, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Usage } from '@bivouac/shared';
 import { decrypt, encrypt } from './crypto.js';
 import type { RouteTask } from './routes.js';
 
@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS preview_tickets (
   hash TEXT PRIMARY KEY, task_id INTEGER NOT NULL, expires_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS idempotency (
   key TEXT PRIMARY KEY, project_id INTEGER NOT NULL, task_id INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS claude_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE, kind TEXT NOT NULL, secret_enc TEXT NOT NULL,
+  connected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), is_default INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS instructions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, text TEXT NOT NULL,
   consumed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
@@ -88,6 +91,68 @@ export class Store {
     const pc = cols('projects');
     if (!pc.includes('github_repo')) this.db.exec('ALTER TABLE projects ADD COLUMN github_repo TEXT');
     if (!pc.includes('installation_id')) this.db.exec('ALTER TABLE projects ADD COLUMN installation_id INTEGER');
+    if (!pc.includes('claude_account_id')) this.db.exec('ALTER TABLE projects ADD COLUMN claude_account_id INTEGER');
+    if (!cols('tasks').includes('account_name')) this.db.exec('ALTER TABLE tasks ADD COLUMN account_name TEXT');
+    this.migrateClaudeAccounts();
+  }
+
+  /**
+   * v0.4: the single Claude token / API key of earlier versions becomes the account "Default" (the API key wins when both
+   * existed, as it did for the CLI). Idempotent: the old settings are removed once copied.
+   */
+  private migrateClaudeAccounts() {
+    if ((this.db.prepare('SELECT COUNT(*) AS n FROM claude_accounts').get() as any).n > 0) return;
+    const oauth = this.getSecretSetting('claude_oauth_token'), key = this.getSecretSetting('anthropic_api_key');
+    const at = this.getSetting('claude_token_at') ?? new Date().toISOString();
+    if (!oauth && !key) return;
+    const tx = this.db.transaction(() => {
+      if (key) this.db.prepare('INSERT INTO claude_accounts(name,kind,secret_enc,connected_at,is_default) VALUES(?,?,?,?,1)').run('Default', 'apikey', encrypt(this.key, key), at);
+      if (oauth) this.db.prepare('INSERT INTO claude_accounts(name,kind,secret_enc,connected_at,is_default) VALUES(?,?,?,?,?)').run(key ? 'Default (subscription)' : 'Default', 'oauth', encrypt(this.key, oauth), at, key ? 0 : 1);
+      for (const k of ['claude_oauth_token', 'anthropic_api_key', 'claude_token_at']) this.db.prepare('DELETE FROM settings WHERE key=?').run(k);
+    });
+    tx();
+  }
+
+  // ---- Claude accounts
+  private accountFromRow(r: any, lifetimeDays: number): ClaudeAccount {
+    const expiresAt = r.kind === 'oauth' ? new Date(Date.parse(r.connected_at) + lifetimeDays * 86400_000).toISOString() : null;
+    const used = (this.db.prepare('SELECT COUNT(*) AS n FROM projects WHERE claude_account_id=?').get(r.id) as any).n as number;
+    return { id: r.id, name: r.name, kind: r.kind, connectedAt: r.connected_at, expiresAt, expired: !!expiresAt && Date.parse(expiresAt) < Date.now(), isDefault: !!r.is_default, projects: used };
+  }
+  listClaudeAccounts(lifetimeDays = 365): ClaudeAccount[] {
+    return this.db.prepare('SELECT * FROM claude_accounts ORDER BY is_default DESC, id').all().map((r) => this.accountFromRow(r, lifetimeDays));
+  }
+  getClaudeAccount(id: number, lifetimeDays = 365): ClaudeAccount | null {
+    const r = this.db.prepare('SELECT * FROM claude_accounts WHERE id=?').get(id);
+    return r ? this.accountFromRow(r, lifetimeDays) : null;
+  }
+  getDefaultClaudeAccount(lifetimeDays = 365): ClaudeAccount | null {
+    const r = this.db.prepare('SELECT * FROM claude_accounts ORDER BY is_default DESC, id LIMIT 1').get();
+    return r ? this.accountFromRow(r, lifetimeDays) : null;
+  }
+  getClaudeSecret(id: number): string | null {
+    const r = this.db.prepare('SELECT secret_enc FROM claude_accounts WHERE id=?').get(id) as any;
+    return r ? decrypt(this.key, r.secret_enc) : null;
+  }
+  /** Names are unique, case-insensitively. The first account becomes the default. */
+  createClaudeAccount(a: { name: string; kind: 'oauth' | 'apikey'; secret: string }): number {
+    const first = (this.db.prepare('SELECT COUNT(*) AS n FROM claude_accounts').get() as any).n === 0;
+    const info = this.db.prepare('INSERT INTO claude_accounts(name,kind,secret_enc,is_default) VALUES(?,?,?,?)').run(a.name, a.kind, encrypt(this.key, a.secret), first ? 1 : 0);
+    return Number(info.lastInsertRowid);
+  }
+  claudeAccountNameTaken(name: string, exceptId?: number): boolean {
+    return !!this.db.prepare('SELECT 1 FROM claude_accounts WHERE name=? COLLATE NOCASE AND id<>?').get(name, exceptId ?? -1);
+  }
+  renameClaudeAccount(id: number, name: string) { this.db.prepare('UPDATE claude_accounts SET name=? WHERE id=?').run(name, id); }
+  renewClaudeAccount(id: number, a: { kind: 'oauth' | 'apikey'; secret: string }) {
+    this.db.prepare("UPDATE claude_accounts SET kind=?, secret_enc=?, connected_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?").run(a.kind, encrypt(this.key, a.secret), id);
+  }
+  setDefaultClaudeAccount(id: number) {
+    this.db.transaction(() => { this.db.prepare('UPDATE claude_accounts SET is_default=0').run(); this.db.prepare('UPDATE claude_accounts SET is_default=1 WHERE id=?').run(id); })();
+  }
+  /** Projects that used it fall back to the default account. */
+  deleteClaudeAccount(id: number) {
+    this.db.transaction(() => { this.db.prepare('UPDATE projects SET claude_account_id=NULL WHERE claude_account_id=?').run(id); this.db.prepare('DELETE FROM claude_accounts WHERE id=?').run(id); })();
   }
 
   // ---- settings
@@ -110,7 +175,7 @@ export class Store {
 
   // ---- projects
   private projectFromRow(r: any): Project {
-    return { id: r.id, name: r.name, repoUrl: r.repo_url, githubRepo: r.github_repo ?? null, installationId: r.installation_id ?? null, defaultBranch: r.default_branch, hasGithubToken: !!r.github_token_enc, config: JSON.parse(r.config_json), createdAt: r.created_at };
+    return { id: r.id, name: r.name, repoUrl: r.repo_url, githubRepo: r.github_repo ?? null, installationId: r.installation_id ?? null, defaultBranch: r.default_branch, hasGithubToken: !!r.github_token_enc, claudeAccountId: r.claude_account_id ?? null, config: JSON.parse(r.config_json), createdAt: r.created_at };
   }
   createProject(p: { name: string; repoUrl: string; defaultBranch: string; githubToken?: string | null; config?: ProjectConfig; githubRepo?: string | null; installationId?: number | null }): Project {
     const info = this.db.prepare('INSERT INTO projects(name,repo_url,default_branch,github_token_enc,config_json,github_repo,installation_id) VALUES(?,?,?,?,?,?,?)')
@@ -133,7 +198,8 @@ export class Store {
     const r = this.db.prepare('SELECT github_token_enc FROM projects WHERE id=?').get(id) as any;
     return r?.github_token_enc ? decrypt(this.key, r.github_token_enc) : null;
   }
-  updateProject(id: number, patch: { config?: ProjectConfig; githubToken?: string | null; defaultBranch?: string }) {
+  updateProject(id: number, patch: { config?: ProjectConfig; githubToken?: string | null; defaultBranch?: string; claudeAccountId?: number | null }) {
+    if (patch.claudeAccountId !== undefined) this.db.prepare('UPDATE projects SET claude_account_id=? WHERE id=?').run(patch.claudeAccountId, id);
     if (patch.config !== undefined) this.db.prepare('UPDATE projects SET config_json=? WHERE id=?').run(JSON.stringify(patch.config), id);
     if (patch.githubToken !== undefined) this.db.prepare('UPDATE projects SET github_token_enc=? WHERE id=?').run(patch.githubToken ? encrypt(this.key, patch.githubToken) : null, id);
     if (patch.defaultBranch) this.db.prepare('UPDATE projects SET default_branch=? WHERE id=?').run(patch.defaultBranch, id);
@@ -154,7 +220,7 @@ export class Store {
       id: r.id, projectId: r.project_id, projectName: r.project_name, name: r.name, title: r.title, prompt: r.prompt, successCommand: r.success_command,
       branch: r.branch, baseBranch: r.base_branch, status: r.status, iteration: r.iteration, maxIterations: r.max_iterations,
       maxCostUsd: r.max_cost_usd, maxTokens: r.max_tokens, sessionId: r.session_id, usage,
-      devPort: r.dev_port ?? null, ports, services: Object.entries(live.services).map(([name, v]) => ({ name, image: v.image })), configError: live.error, previewUrl: this.previewUrlFor(r.project_name, r.name), pushed: !!r.pushed, prUrl: r.pr_url, error: r.error,
+      devPort: r.dev_port ?? null, ports, services: Object.entries(live.services).map(([name, v]) => ({ name, image: v.image })), configError: live.error, previewUrl: this.previewUrlFor(r.project_name, r.name), pushed: !!r.pushed, prUrl: r.pr_url, error: r.error, accountName: r.account_name ?? null,
       createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at,
     };
   }
@@ -208,8 +274,8 @@ export class Store {
     this.addEvent(id, 'status', { status, error: error ?? null });
     return this.emitTask(id)!;
   }
-  patchTask(id: number, p: Partial<{ devPort: number; liveConfig: LiveConfig; iteration: number; sessionId: string; pushed: boolean; prUrl: string; maxIterations: number; maxCostUsd: number; maxTokens: number | null; error: string | null }>) {
-    const m: Record<string, string> = { liveConfig: 'live_config', devPort: 'dev_port', iteration: 'iteration', sessionId: 'session_id', pushed: 'pushed', prUrl: 'pr_url', maxIterations: 'max_iterations', maxCostUsd: 'max_cost_usd', maxTokens: 'max_tokens', error: 'error' };
+  patchTask(id: number, p: Partial<{ devPort: number; liveConfig: LiveConfig; iteration: number; sessionId: string; pushed: boolean; prUrl: string; maxIterations: number; maxCostUsd: number; maxTokens: number | null; error: string | null; accountName: string }>) {
+    const m: Record<string, string> = { liveConfig: 'live_config', devPort: 'dev_port', iteration: 'iteration', sessionId: 'session_id', pushed: 'pushed', prUrl: 'pr_url', maxIterations: 'max_iterations', maxCostUsd: 'max_cost_usd', maxTokens: 'max_tokens', error: 'error', accountName: 'account_name' };
     for (const [k, v] of Object.entries(p)) {
       if (v === undefined) continue;
       this.db.prepare(`UPDATE tasks SET ${m[k]}=? WHERE id=?`).run(typeof v === 'boolean' ? (v ? 1 : 0) : typeof v === 'object' && v !== null ? JSON.stringify(v) : v, id);
