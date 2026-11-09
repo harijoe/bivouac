@@ -30,7 +30,7 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
     }) as never);
 
   tool('list_projects', 'List projects', 'List the projects (GitHub repositories) bivouac can work on, with their task counts and total cost. Call this first to get valid project names. Projects are added by the user in the dashboard, not through this tool.', READ, {},
-    () => svc.listProjects().map((p) => ({ name: p.name, repository: p.githubRepo ?? p.repoUrl, defaultBranch: p.defaultBranch, tasks: p.totals.tasks, totalCostUsd: Number(p.totals.costUsd.toFixed(4)), claudeAccount: p.claudeAccountName })));
+    () => svc.listProjects().map((p) => ({ name: p.name, repository: p.githubRepo ?? p.repoUrl, defaultBranch: p.defaultBranch, tasks: p.totals.tasks, totalCostUsd: Number(p.totals.costUsd.toFixed(4)) })));
 
   tool('list_tasks', 'List tasks', 'List tasks with their status, cost and preview URL, newest first. Optionally filter by project or status. Statuses: queued, starting, running, checking (running the success command), succeeded, failed, budget_exceeded, max_iterations, stopped, blocked (the agent cannot continue and says what it needs: answer with resume_task and a message), stuck (the same check failed twice with no code change). costUsd is the API-equivalent estimate when costKind is estimated_api_equivalent (Claude subscription: not a spend).', READ,
     { project: PROJECT.optional(), status: z.string().optional().describe('Only tasks with this status.') },

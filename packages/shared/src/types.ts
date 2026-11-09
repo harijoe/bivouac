@@ -25,22 +25,7 @@ export interface Project {
   defaultBranch: string;
   hasGithubToken: boolean;
   config: import('./config.js').ProjectConfig;
-  /** The Claude account this project uses; null = the default account. */
-  claudeAccountId: number | null;
   createdAt: string;
-}
-
-/** A way to sign in to Claude: a subscription (long-lived OAuth token) or an API key. Secrets never leave the daemon. */
-export interface ClaudeAccount {
-  id: number;
-  name: string;
-  kind: 'oauth' | 'apikey';
-  connectedAt: string;
-  expiresAt: string | null;
-  expired: boolean;
-  isDefault: boolean;
-  /** Projects that chose this account explicitly. */
-  projects: number;
 }
 
 export interface TaskPort { name: string; port: number; primary: boolean; url: string }
@@ -75,8 +60,6 @@ export interface Task {
   pushed: boolean;
   prUrl: string | null;
   error: string | null;
-  /** Name of the Claude account used by the last agent session. */
-  accountName: string | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;

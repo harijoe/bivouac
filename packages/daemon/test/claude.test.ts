@@ -107,7 +107,7 @@ describe('Connect Claude from the dashboard', () => {
     expect(Date.parse(status.expiresAt) - Date.now()).toBeGreaterThan(364 * 86400_000);
     const raw = JSON.stringify(env.store.db.prepare('SELECT * FROM settings').all());
     expect(raw).not.toContain('sk-ant-oat01');
-    expect(env.store.getClaudeSecret(env.store.listClaudeAccounts()[0].id)).toMatch(/^sk-ant-oat01-FAKE/);
+    expect(env.store.getSecretSetting('claude_oauth_token')).toMatch(/^sk-ant-oat01-FAKE/);
     expect(env.ctx.auth.listAudit().some((a) => a.action === 'claude_connected')).toBe(true);
   });
 
@@ -120,8 +120,8 @@ describe('Connect Claude from the dashboard', () => {
     for (let i = 0; i < 50; i++) { st = await (await env.call('GET', `/api/claude/login/${id}`)).json(); if (st.phase === 'waiting_code') break; await new Promise((r) => setTimeout(r, 50)); }
     // a code of real length, sent the way the dashboard does; then nobody polls the session
     await env.call('POST', `/api/claude/login/${id}/code`, { code: 'FAKE-CODE' });
-    for (let i = 0; i < 80 && !env.store.listClaudeAccounts().length; i++) await new Promise((r) => setTimeout(r, 100));
-    expect(env.store.getClaudeSecret(env.store.listClaudeAccounts()[0].id)).toMatch(/^sk-ant-oat01-FAKE/);
+    for (let i = 0; i < 80 && !env.store.getSecretSetting('claude_oauth_token'); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(env.store.getSecretSetting('claude_oauth_token')).toMatch(/^sk-ant-oat01-FAKE/);
     expect(env.ctx.auth.listAudit().some((a) => a.action === 'claude_connected')).toBe(true);
     // the page comes back later and still gets a clean answer
     expect(await (await env.call('GET', `/api/claude/login/${id}`)).json()).toEqual({ phase: 'done' });

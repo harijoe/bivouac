@@ -8,7 +8,6 @@ import type { GithubApp } from './githubapp.js';
 import type { Previews, ShareDuration } from './preview.js';
 import type { TaskManager } from './runner.js';
 import { TOKEN_LIFETIME_DAYS } from './claude.js';
-import { resolveClaude } from './accounts.js';
 import type { Updates } from './updates.js';
 import type { ProjectContext } from './projectcontext.js';
 
@@ -45,87 +44,35 @@ export class Service {
    * With a subscription the CLI's cost is the API-equivalent estimate, not money spent; only an API key is billed per token.
    * The dollar budget still bounds consumption in both cases.
    */
-  costKind(projectId?: number): 'estimated_api_equivalent' | 'cost' {
-    return resolveClaude(this.store, this.cfg, projectId)?.kind === 'apikey' ? 'cost' : 'estimated_api_equivalent';
+  costKind(): 'estimated_api_equivalent' | 'cost' {
+    const key = this.store.getSecretSetting('anthropic_api_key') ?? this.cfg.apiKey;
+    return key ? 'cost' : 'estimated_api_equivalent';
   }
 
-  // ---- Claude accounts
-  /** Status of the account a project would use (the default account without a project). */
-  claudeStatus(projectId?: number): { connected: boolean; kind: 'oauth' | 'apikey' | null; expiresAt: string | null; expired: boolean; accountName: string | null; accountId: number | null; accounts: number } {
-    const c = resolveClaude(this.store, this.cfg, projectId);
-    return { connected: !!c, kind: c?.kind === 'apikey' ? 'apikey' : c ? 'oauth' : null, expiresAt: c?.expiresAt ?? null, expired: !!c?.expired, accountName: c?.name ?? null, accountId: c?.id ?? null, accounts: this.store.listClaudeAccounts().length };
+  // ---- Claude credentials
+  claudeStatus(): { connected: boolean; kind: 'oauth' | 'apikey' | null; expiresAt: string | null; expired: boolean } {
+    const oauth = this.store.getSecretSetting('claude_oauth_token') ?? this.cfg.oauthToken;
+    const key = this.store.getSecretSetting('anthropic_api_key') ?? this.cfg.apiKey;
+    const at = this.store.getSetting('claude_token_at');
+    const expiresAt = oauth && at ? new Date(Date.parse(at) + TOKEN_LIFETIME_DAYS * 86400_000).toISOString() : null;
+    const expired = !!expiresAt && Date.parse(expiresAt) < Date.now();
+    return { connected: !!(oauth || key), kind: oauth ? 'oauth' : key ? 'apikey' : null, expiresAt, expired };
   }
-  listClaudeAccounts() {
-    const accounts = this.store.listClaudeAccounts(TOKEN_LIFETIME_DAYS);
-    if (accounts.length === 0 && (this.cfg.oauthToken || this.cfg.apiKey)) {
-      // credentials given through the server environment: shown as read-only "Default"
-      return [{ id: 0, name: 'Default', kind: this.cfg.apiKey ? 'apikey' as const : 'oauth' as const, connectedAt: '', expiresAt: null, expired: false, isDefault: true, projects: 0 }];
-    }
-    return accounts;
-  }
-  private accountName(raw: unknown, exceptId?: number): string {
-    const name = String(raw ?? '').trim().replace(/\s+/g, ' ');
-    if (!name || name.length > 40) throw new UserError('Give the account a short name (1 to 40 characters), for example “Personal”.', 'invalid');
-    if (this.store.claudeAccountNameTaken(name, exceptId)) throw new UserError(`An account named “${name}” already exists. Pick another name.`, 'name_taken', 409);
-    return name;
-  }
-  checkAccountName(raw: unknown) { return this.accountName(raw); }
-  /** Stores the token of a finished sign-in: a new account, or the renewal of an existing one. */
-  saveClaudeLogin(o: { token: string; name?: string; accountId?: number }, actor: string): number {
-    if (o.accountId) {
-      if (!this.store.getClaudeAccount(o.accountId)) throw new UserError('This Claude account does not exist anymore.', 'unknown_account', 404);
-      this.store.renewClaudeAccount(o.accountId, { kind: 'oauth', secret: o.token });
-      this.auth.audit(actor, 'claude_renewed', { account: o.accountId });
-      return o.accountId;
-    }
-    const id = this.store.createClaudeAccount({ name: this.accountName(o.name ?? (this.store.listClaudeAccounts().length ? '' : 'Default')), kind: 'oauth', secret: o.token });
-    this.auth.audit(actor, 'claude_connected', { kind: 'oauth', account: id });
-    return id;
-  }
-  saveClaudeApiKey(o: { key: string; name?: string; accountId?: number }, actor: string): number {
-    const key = String(o.key ?? '').trim();
-    if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(key)) throw new UserError('This does not look like an Anthropic API key (it starts with sk-ant-).');
-    if (o.accountId) {
-      if (!this.store.getClaudeAccount(o.accountId)) throw new UserError('This Claude account does not exist anymore.', 'unknown_account', 404);
-      this.store.renewClaudeAccount(o.accountId, { kind: 'apikey', secret: key });
-      this.auth.audit(actor, 'claude_renewed', { account: o.accountId });
-      return o.accountId;
-    }
-    const id = this.store.createClaudeAccount({ name: this.accountName(o.name ?? (this.store.listClaudeAccounts().length ? '' : 'Default')), kind: 'apikey', secret: key });
-    this.auth.audit(actor, 'claude_connected', { kind: 'apikey', account: id });
-    return id;
-  }
-  updateClaudeAccount(id: number, o: { name?: string; isDefault?: boolean }, actor: string) {
-    if (!this.store.getClaudeAccount(id)) throw new UserError('This Claude account does not exist.', 'unknown_account', 404);
-    if (o.name !== undefined) this.store.renameClaudeAccount(id, this.accountName(o.name, id));
-    if (o.isDefault) this.store.setDefaultClaudeAccount(id);
-    this.auth.audit(actor, 'claude_account_updated', { account: id });
-  }
-  deleteClaudeAccount(id: number, actor: string) {
-    const a = this.store.getClaudeAccount(id);
-    if (!a) throw new UserError('This Claude account does not exist.', 'unknown_account', 404);
-    const others = this.store.listClaudeAccounts().filter((x) => x.id !== id);
-    if (a.isDefault && others.length) throw new UserError('This is the default account. Make another account the default first, then delete this one.', 'is_default', 409);
-    this.store.deleteClaudeAccount(id);
-    this.auth.audit(actor, 'claude_disconnected', { account: id });
-  }
-  /** Name of the account a project uses, for display (never the token). */
-  accountNameFor(projectId: number): string | null { return resolveClaude(this.store, this.cfg, projectId)?.name ?? null; }
   /** No task may start while an update is scheduled or running: the error tells the assistant why and when to retry. */
   private assertAccepting() {
     const why = this.updates?.blockReason();
     if (why) throw new UserError(why, 'updating', 409);
   }
-  private assertClaude(projectId?: number) {
-    const c = resolveClaude(this.store, this.cfg, projectId);
-    const link = this.dashboardUrl('/settings/claude');
-    if (!c) throw new UserError(`Claude is not connected. Ask the user to connect a Claude account in the bivouac dashboard, then retry. Link: ${link}`, 'claude_not_connected', 412);
-    if (c.expired) throw new UserError(`The token of the Claude account “${c.name}” has expired. Ask the user to reconnect it in the dashboard, then retry. Link: ${link}`, 'claude_expired', 412);
+  private assertClaude() {
+    const s = this.claudeStatus();
+    const link = this.dashboardUrl('/settings');
+    if (!s.connected) throw new UserError(`Claude is not connected. Ask the user to connect Claude in the bivouac dashboard, then retry. Link: ${link}`, 'claude_not_connected', 412);
+    if (s.expired) throw new UserError(`The Claude token has expired. Ask the user to reconnect Claude in the dashboard, then retry. Link: ${link}`, 'claude_expired', 412);
   }
 
   // ---- projects
   listProjects() {
-    return this.store.listProjects().map((p) => ({ ...p, totals: this.store.totals(p.id), claudeAccountName: this.accountNameFor(p.id) }));
+    return this.store.listProjects().map((p) => ({ ...p, totals: this.store.totals(p.id) }));
   }
   resolveProject(ref: string | number): Project {
     const p = typeof ref === 'number' || /^\d+$/.test(String(ref)) ? this.store.getProject(Number(ref)) : this.store.getProjectByName(String(ref));
@@ -178,7 +125,7 @@ export class Service {
   summary(t: Task): TaskSummary {
     return {
       id: t.id, name: t.name, project: t.projectName, title: t.title, status: t.status, iteration: t.iteration, maxIterations: t.maxIterations,
-      costUsd: t.usage.costUsd, costKind: this.costKind(t.projectId), maxCostUsd: t.maxCostUsd, tokens: t.usage.inputTokens + t.usage.outputTokens + t.usage.cacheCreationTokens,
+      costUsd: t.usage.costUsd, costKind: this.costKind(), maxCostUsd: t.maxCostUsd, tokens: t.usage.inputTokens + t.usage.outputTokens + t.usage.cacheCreationTokens,
       previewUrl: t.previewUrl, dashboardUrl: this.taskUrl(t), prUrl: t.prUrl, pushed: t.pushed, branch: t.branch, error: t.error, createdAt: t.createdAt, finishedAt: t.finishedAt,
       urls: t.ports.map((p) => ({ name: p.name, port: p.port, main: p.primary, url: p.url })), services: t.services, configError: t.configError,
     };
@@ -192,16 +139,6 @@ export class Service {
     } else if (typeof taskRef === 'number' || /^\d+$/.test(String(taskRef))) t = this.store.getTask(Number(taskRef));
     if (!t) throw new UserError(`Unknown task "${taskRef}"${projectRef ? ` in project "${projectRef}"` : ''}. Use list_tasks to see the existing tasks.`, 'unknown_task', 404);
     return t;
-  }
-
-  /** A free task name derived from the prompt, for the dashboard form where the name is optional. */
-  suggestTaskName(project: string | number, prompt: string): string {
-    const p = this.resolveProject(project);
-    const base = slugify(titleFromPrompt(prompt, 60), 34) || 'task';
-    for (let i = 1; ; i++) {
-      const name = i === 1 ? base : `${base}-${i}`;
-      if (!this.store.taskNameTaken(p.id, name)) return name;
-    }
   }
 
   async createTask(o: {
@@ -220,7 +157,7 @@ export class Service {
     const prompt = String(o.prompt ?? '').trim();
     if (!prompt) throw new UserError('prompt is required: describe what the agent must build or fix.', 'invalid');
     this.assertAccepting();
-    this.assertClaude(p.id);
+    this.assertClaude();
     const baseBranch = o.baseBranch || p.defaultBranch;
     let repoCfg = {};
     try {
@@ -256,14 +193,14 @@ export class Service {
   }
   async resumeTask(t: Task, actor: Actor, text?: string) {
     this.assertAccepting();
-    this.assertClaude(t.projectId);
+    this.assertClaude();
     await this.mgr.resume(t.id, text);
     this.auth.audit(actor.label, 'task_resumed', { task: t.name, project: t.projectName });
     return this.store.getTask(t.id)!;
   }
   async instruct(t: Task, text: string, actor: Actor) {
     if (!text.trim()) throw new UserError('text is required', 'invalid');
-    if (!this.mgr.isActive(t.id)) { this.assertAccepting(); this.assertClaude(t.projectId); }
+    if (!this.mgr.isActive(t.id)) { this.assertAccepting(); this.assertClaude(); }
     this.auth.audit(actor.label, 'task_instruction', { task: t.name });
     return this.mgr.instruct(t.id, text.trim());
   }

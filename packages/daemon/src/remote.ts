@@ -33,11 +33,6 @@ export class RemoteSandbox implements Sandbox {
   async start(spec: SandboxSpec) { await this.c.call('POST', this.p('start'), { env: spec.env, cpus: spec.cpus, memory: spec.memory, services: spec.services }); }
   async push(o: { branch: string; token: string | null }) { await this.c.call('POST', this.p('push'), o); }
   async unpushed() { return (await this.c.call('GET', this.p('unpushed'))).count as number; }
-  async tail(rel: string, o: { before?: number; after?: number; bytes?: number } = {}) {
-    const q = `&path=${encodeURIComponent(rel)}${o.before !== undefined ? `&before=${o.before}` : ''}${o.after !== undefined ? `&after=${o.after}` : ''}${o.bytes ? `&bytes=${o.bytes}` : ''}`;
-    return (await this.c.call('GET', this.p('tail', q))) as { text: string; start: number; end: number; size: number };
-  }
-  async serviceLogs(name: string, tail: number) { return (await this.c.call('GET', this.p('service-logs', `&name=${encodeURIComponent(name)}&tail=${tail}`))).text as string; }
   async fingerprint() { return (await this.c.call('GET', this.p('fingerprint'))).hash as string; }
   async readFile(rel: string) { return (await this.c.call('GET', this.p('file', `&path=${encodeURIComponent(rel)}`))).content as string | null; }
   async writeFile(rel: string, content: string) { await this.c.call('PUT', this.p('file'), { path: rel, content }); }

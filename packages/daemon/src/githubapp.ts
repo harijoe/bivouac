@@ -5,7 +5,7 @@ import { randomToken } from './auth.js';
 export interface GithubAppCreds {
   id: number; slug: string; name: string; clientId: string; clientSecret: string; pem: string; webhookSecret: string; htmlUrl: string; ownerLogin: string;
 }
-export interface RepoInfo { fullName: string; defaultBranch: string; private: boolean; installationId: number; pushedAt?: string | null; owner?: string; }
+export interface RepoInfo { fullName: string; defaultBranch: string; private: boolean; installationId: number }
 
 type F = typeof fetch;
 const API = 'https://api.github.com';
@@ -132,12 +132,11 @@ export class GithubApp {
       const tok = await this.installationToken(inst.id);
       for (let page = 1; page <= 10; page++) {
         const j = await this.call(`/installation/repositories?per_page=100&page=${page}`, { auth: tok });
-        for (const r of j.repositories ?? []) out.push({ fullName: r.full_name, defaultBranch: r.default_branch, private: !!r.private, installationId: inst.id, pushedAt: r.pushed_at ?? null, owner: r.owner?.login ?? String(r.full_name).split('/')[0] });
+        for (const r of j.repositories ?? []) out.push({ fullName: r.full_name, defaultBranch: r.default_branch, private: !!r.private, installationId: inst.id });
         if ((j.repositories ?? []).length < 100) break;
       }
     }
-    // most recently pushed first: what the user is working on comes up first
-    return out.sort((a, b) => (b.pushedAt ?? '').localeCompare(a.pushedAt ?? '') || a.fullName.localeCompare(b.fullName));
+    return out;
   }
   installUrl(): string | null {
     const c = this.creds;

@@ -52,7 +52,6 @@ state.runs += 1;
 const sessionId = resume || state.sessionId;
 writeFileSync(statePath, JSON.stringify(state));
 appendFileSync(`${stateDir}/fake-prompts.log`, `=== run ${state.runs} resume=${resume ?? ''}\n${prompt}\n`);
-appendFileSync(`${stateDir}/fake-auth.log`, `${process.env.ANTHROPIC_API_KEY ? 'apikey:' + process.env.ANTHROPIC_API_KEY : ''}${process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'oauth:' + process.env.CLAUDE_CODE_OAUTH_TOKEN : ''}\n`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const emit = async (o) => { console.log(JSON.stringify({ ...o, session_id: sessionId })); if (state.delay) await sleep(state.delay); };
 const usage = (i, o) => ({ input_tokens: i, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: o, service_tier: 'standard' });

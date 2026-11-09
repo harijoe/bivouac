@@ -139,11 +139,6 @@ export function createExecutorApp(cfg: DaemonConfig, docker: Dockerode, login: L
   app.post('/sandboxes/:id/destroy', wrap(async (c) => { await sb(c).destroy(); return c.json({ ok: true }); }));
   app.post('/sandboxes/:id/push', wrap(async (c) => { const b = await c.req.json(); await sb(c).push({ branch: String(b.branch), token: b.token ?? null }); return c.json({ ok: true }); }));
   app.get('/sandboxes/:id/unpushed', wrap(async (c) => c.json({ count: await sb(c).unpushed() })));
-  app.get('/sandboxes/:id/tail', wrap(async (c) => {
-    const n = (k: string) => (c.req.query(k) !== undefined ? Number(c.req.query(k)) : undefined);
-    return c.json(await sb(c).tail(c.req.query('path') ?? '', { before: n('before'), after: n('after'), bytes: n('bytes') }));
-  }));
-  app.get('/sandboxes/:id/service-logs', wrap(async (c) => c.json({ text: await sb(c).serviceLogs(c.req.query('name') ?? '', Number(c.req.query('tail') ?? 500)) })));
   app.get('/sandboxes/:id/fingerprint', wrap(async (c) => c.json({ hash: await sb(c).fingerprint() })));
   app.get('/sandboxes/:id/file', wrap(async (c) => c.json({ content: await sb(c).readFile(c.req.query('path') ?? '') })));
   app.put('/sandboxes/:id/file', wrap(async (c) => { const b = await c.req.json(); await sb(c).writeFile(String(b.path), String(b.content)); return c.json({ ok: true }); }));
