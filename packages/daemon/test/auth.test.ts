@@ -196,6 +196,28 @@ describe('setup link and admin onboarding', () => {
     expect(last).toBe(429);
   });
 
+  it('domain step: a root domain is checked on itself and on a random subdomain, with records relative to the zone', async () => {
+    const env = makeEnv();
+    const code = env.ctx.auth.createSetupCode();
+    const jar = cookies(await env.app.request(`/setup?code=${code}`));
+    const post = (u: string, b: object) => env.app.request(u, { method: 'POST', headers: { cookie: jar, 'content-type': 'application/json' }, body: JSON.stringify(b) });
+    const asked: string[] = [];
+    env.ctx.resolve4 = async (h) => { asked.push(h); return ['1.2.3.4']; };
+    const r1: any = await (await post('/api/setup/domain/check', { domain: 'bivouac.cloud' })).json();
+    expect(r1.ok).toBe(true);
+    expect(r1.records.map((r: any) => r.name)).toEqual(['@', '*']);
+    const r2: any = await (await post('/api/setup/domain/check', { domain: 'bivouac.cloud' })).json();
+    expect(asked.filter((h) => h === 'bivouac.cloud')).toHaveLength(2);
+    expect(asked.filter((h) => /^bv-[0-9a-f]{8}\.bivouac\.cloud$/.test(h))).toHaveLength(2);
+    expect(r1.probe).not.toBe(r2.probe);
+    const sub: any = await (await post('/api/setup/domain/check', { domain: 'dev.deslope.com' })).json();
+    expect(sub.records.map((r: any) => r.name)).toEqual(['dev', '*.dev']);
+    expect(asked).toContain('dev.deslope.com');
+    expect(asked.some((h) => /^bv-[0-9a-f]{8}\.dev\.deslope\.com$/.test(h))).toBe(true);
+    const uk: any = await (await post('/api/setup/domain/check', { domain: 'mysite.co.uk' })).json();
+    expect(uk.records.map((r: any) => r.name)).toEqual(['@', '*']);
+  });
+
   it('domain step: DNS check against the server IP, then the new domain is served', async () => {
     const env = makeEnv();
     const code = env.ctx.auth.createSetupCode();
@@ -272,5 +294,36 @@ describe('GitHub installation tokens', () => {
     const pr = gh.calls.find((c) => c.url.endsWith('/pulls'))!;
     expect(pr.auth).toMatch(/^Bearer ghs_/);
     expect(pr.body).toMatchObject({ head: 'agent/x', base: 'main' });
+  });
+});
+
+describe('GitHub step: organisation lookup and repositories added with a token', () => {
+  it('validates an organisation name against the public API (found, not found, rate limited)', async () => {
+    const gh = mockGithub();
+    const env = makeEnv({}, { github: gh.impl });
+    const code = env.ctx.auth.createSetupCode();
+    const jar = cookies(await env.app.request(`/setup?code=${code}`));
+    const get = async (n: string) => { const r = await env.app.request(`/api/setup/github/org?name=${n}`, { headers: { cookie: jar } }); return { status: r.status, body: (await r.json()) as any }; };
+    expect((await get('alpic-ai')).body).toEqual({ found: true, login: 'alpic-ai', name: 'Alpic', avatarUrl: 'https://avatars.githubusercontent.com/u/1' });
+    expect((await get('nope')).body).toEqual({ found: false });
+    expect((await get('bad%20name')).body).toEqual({ found: false });
+    const limited = await get('limited');
+    expect(limited.status).toBe(503); expect(limited.body.error).toMatch(/limiting/);
+    expect(gh.calls.every((c) => c.auth === null)).toBe(true); // public API, no credentials
+    expect((await env.app.request('/api/setup/github/org?name=alpic-ai')).status).toBe(401); // the setup guard still applies
+  });
+
+  it('adds a repository with a fine-grained token after checking access and permissions', async () => {
+    const gh = mockGithub();
+    const env = makeEnv({}, { github: gh.impl });
+    const add = async (token: string, repoUrl = 'https://github.com/julien/demo') => env.call('POST', '/api/projects', { repoUrl, githubToken: token });
+    const wrong = await add('ghp_classic'); expect(wrong.status).toBe(400); expect(((await wrong.json()) as any).error).toMatch(/rejected this token/);
+    const other = await add('github_pat_otherrepo'); expect(((await other.json()) as any).error).toMatch(/cannot access julien\/demo.*Only select repositories/);
+    const ro = await add('github_pat_readonly'); expect(((await ro.json()) as any).error).toMatch(/Contents: Read and write/);
+    const np = await add('github_pat_nopulls'); expect(((await np.json()) as any).error).toMatch(/Pull requests: Read and write/);
+    const ok = await add('github_pat_good');
+    expect(ok.status).toBe(201);
+    expect(await ok.json()).toMatchObject({ name: 'demo', defaultBranch: 'trunk', githubRepo: 'julien/demo' });
+    expect(JSON.stringify(env.store.db.prepare('SELECT * FROM projects').all())).not.toContain('github_pat_good'); // stored encrypted
   });
 });

@@ -16,7 +16,17 @@ const cleanEnv = (e: unknown): Record<string, string> => {
 };
 
 /** Pseudo-terminal sessions used to run `claude setup-token` in a throwaway container. */
-export interface LoginSession { id: string; output: string; done: boolean; exitCode: number | null }
+export interface LoginSession { id: string; output: string; done: boolean; exitCode: number | null; /** offset in `output` of the last code sent (0 = none) */ inputAt: number }
+
+/**
+ * Types a code into the CLI's prompt. The CLI (Ink) treats text and Enter arriving in one write as a paste and the
+ * Enter then does not submit, so the text goes first and Enter follows in a separate write after a short pause.
+ */
+export async function typeCode(write: (data: string) => void, text: string, pauseMs = 200): Promise<void> {
+  write(text.replace(/[\r\n]+$/, ''));
+  await new Promise((r) => setTimeout(r, pauseMs));
+  write('\r');
+}
 export interface LoginDriver {
   start(): Promise<LoginSession>;
   get(id: string): LoginSession | null;
@@ -38,24 +48,25 @@ export class DockerLoginDriver implements LoginDriver {
       HostConfig: { AutoRemove: true, Memory: 512 * 1024 ** 2, NanoCpus: 1e9, CapDrop: ['ALL'], SecurityOpt: ['no-new-privileges:true'] },
     });
     const s: LoginSession & { container: Dockerode.Container; stream?: NodeJS.ReadWriteStream; timer: NodeJS.Timeout } =
-      { id, output: '', done: false, exitCode: null, container, timer: setTimeout(() => void this.cancel(id), 10 * 60_000) };
+      { id, output: '', done: false, exitCode: null, inputAt: 0, container, timer: setTimeout(() => void this.cancel(id), 10 * 60_000) };
     this.sessions.set(id, s);
     const st = await container.attach({ stream: true, stdin: true, stdout: true, stderr: true, hijack: true });
     s.stream = st as unknown as NodeJS.ReadWriteStream;
-    st.on('data', (b: Buffer) => { s.output = (s.output + b.toString('utf8')).slice(-200_000); });
+    st.on('data', (b: Buffer) => { if (s.output.length < 1_000_000) s.output += b.toString('utf8'); });
     await container.start();
     await container.resize({ h: 50, w: 500 }).catch(() => {});
     void container.wait().then((r) => { s.done = true; s.exitCode = r.StatusCode; clearTimeout(s.timer); }).catch(() => { s.done = true; s.exitCode = -1; });
-    return { id, output: '', done: false, exitCode: null };
+    return { id, output: '', done: false, exitCode: null, inputAt: 0 };
   }
   get(id: string) {
     const s = this.sessions.get(id);
-    return s ? { id: s.id, output: s.output, done: s.done, exitCode: s.exitCode } : null;
+    return s ? { id: s.id, output: s.output, done: s.done, exitCode: s.exitCode, inputAt: s.inputAt } : null;
   }
   async input(id: string, text: string) {
     const s = this.sessions.get(id);
     if (!s || s.done) throw new Error('login session is not running');
-    s.stream!.write(text.replace(/[\r\n]+$/, '') + '\r');
+    s.inputAt = s.output.length;
+    await typeCode((d) => s.stream!.write(d), text);
   }
   async cancel(id: string) {
     const s = this.sessions.get(id);

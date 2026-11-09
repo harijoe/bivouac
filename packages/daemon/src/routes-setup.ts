@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import type { AppEnv, C, Ctx } from './context.js';
 import { clientIp } from './context.js';
 import { baseUrl } from './config.js';
+import { dnsPlan } from '@bivouac/shared';
 
 const DOMAIN_RE = /^(?=.{4,100}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
@@ -52,10 +53,11 @@ export function setupRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   // ---- step 1: domain
   const checkDomain = async (domain: string) => {
     if (!DOMAIN_RE.test(domain)) return { ok: false, error: 'This does not look like a domain name. Example: bv.example.com', apex: [], wildcard: [] };
-    const probe = 'bv-dns-check.' + domain;
+    // A random label every time: a stale or cached answer for a fixed name could not prove the wildcard record exists.
+    const probe = `bv-${randomBytes(4).toString('hex')}.${domain}`;
     const [apex, wildcard] = await Promise.all([ctx.resolve4(domain).catch((): string[] => []), ctx.resolve4(probe).catch((): string[] => [])]);
     const ip = ctx.publicIp;
-    return { ok: !!ip && apex.includes(ip) && wildcard.includes(ip), apex, wildcard, expected: ip };
+    return { ok: !!ip && apex.includes(ip) && wildcard.includes(ip), apex, wildcard, expected: ip, probe, records: ip ? dnsPlan(domain, ip).records : [] };
   };
   app.post('/api/setup/domain/check', async (c) => {
     const b = await c.req.json().catch(() => ({}));
@@ -77,6 +79,14 @@ export function setupRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   });
 
   // ---- step 2: GitHub App (manifest flow)
+  app.get('/api/setup/github/org', async (c) => {
+    const name = (c.req.query('name') ?? '').trim();
+    if (!name) return c.json({ found: false });
+    try {
+      const o = await gh.publicOrg(name);
+      return c.json(o ? { found: true, ...o } : { found: false });
+    } catch (e: any) { return c.json({ error: e.message }, 503); }
+  });
   app.post('/api/setup/github/manifest', async (c) => {
     const b = await c.req.json().catch(() => ({}));
     const org = b.organization ? String(b.organization).trim() : '';

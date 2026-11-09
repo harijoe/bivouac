@@ -3,7 +3,7 @@ import { streamSSE } from 'hono/streaming';
 import { parseProjectConfig, type Task } from '@bivouac/shared';
 import type { AppEnv, C, Ctx } from './context.js';
 import { baseUrl } from './config.js';
-import { loginState } from './claude.js';
+import { loginState, type LoginState } from './claude.js';
 import type { StoreMessage } from './db.js';
 import { changeDomain } from './routes-setup.js';
 import { UserError, type Actor } from './service.js';
@@ -213,19 +213,43 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   // ---- Claude connection (claude setup-token in a throwaway container)
   const needLogin = () => { if (!ctx.login) throw new UserError('The executor service is not available. Check the bivouac containers on the server.', 'executor_down', 502); return ctx.login; };
   app.get('/api/claude', (c) => c.json(svc.claudeStatus()));
-  app.post('/api/claude/login', run(async (c) => { admin(c); const s = await needLogin().loginStart(); return c.json({ id: s.id }); }));
-  app.get('/api/claude/login/:id', run(async (c) => {
-    admin(c);
+  /**
+   * The daemon, not the browser, finishes a sign-in: as soon as the CLI prints a token it is validated and stored,
+   * even if the page was closed or reloaded. Idempotent (the watcher and the browser's polling both call it).
+   */
+  const logins = new Map<string, { actor: string; state: LoginState; timer: NodeJS.Timeout }>();
+  const settleLogin = async (id: string): Promise<LoginState> => {
     const l = needLogin();
-    const s = await l.loginGet(param(c, 'id'));
-    const st = loginState(s.output, s.done, s.exitCode);
+    const known = logins.get(id);
+    if (known && (known.state.phase === 'done' || known.state.phase === 'error')) return known.state;
+    const s = await l.loginGet(id);
+    const st = await loginState(s.output, s.done, s.exitCode, s.inputAt);
+    if (known) known.state = st;
     if (st.phase === 'done' && st.token) {
       store.setSecretSetting('claude_oauth_token', st.token);
+      store.setSecretSetting('anthropic_api_key', null);
       store.setSetting('claude_token_at', new Date().toISOString());
-      auth.audit(actorOf(c).label, 'claude_connected', { kind: 'oauth' });
-      await l.loginCancel(s.id).catch(() => {});
-      return c.json({ phase: 'done' });
+      auth.audit(known?.actor ?? 'system', 'claude_connected', { kind: 'oauth' });
+      await l.loginCancel(id).catch(() => {});
+      const done: LoginState = { phase: 'done' };
+      if (known) known.state = done;
+      return done;
     }
+    return st;
+  };
+  const watchLogin = (id: string, actor: string) => {
+    const started = Date.now();
+    const entry = { actor, state: { phase: 'starting' } as LoginState, timer: setInterval(() => {
+      void settleLogin(id).then((st) => { if (st.phase === 'done' || st.phase === 'error' || Date.now() - started > 11 * 60_000) clearInterval(entry.timer); })
+        .catch(() => clearInterval(entry.timer));
+    }, 1500) };
+    entry.timer.unref();
+    logins.set(id, entry);
+  };
+  app.post('/api/claude/login', run(async (c) => { admin(c); const s = await needLogin().loginStart(); watchLogin(s.id, actorOf(c).label); return c.json({ id: s.id }); }));
+  app.get('/api/claude/login/:id', run(async (c) => {
+    admin(c);
+    const st = await settleLogin(param(c, 'id'));
     return c.json({ phase: st.phase, url: st.url, message: st.message });
   }));
   app.post('/api/claude/login/:id/code', run(async (c) => {
@@ -236,7 +260,7 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     await needLogin().loginInput(param(c, 'id'), code);
     return c.json({ ok: true });
   }));
-  app.delete('/api/claude/login/:id', run(async (c) => { admin(c); await needLogin().loginCancel(param(c, 'id')).catch(() => {}); return c.json({ ok: true }); }));
+  app.delete('/api/claude/login/:id', run(async (c) => { admin(c); const id = param(c, 'id'); clearInterval(logins.get(id)?.timer); logins.delete(id); await needLogin().loginCancel(id).catch(() => {}); return c.json({ ok: true }); }));
   app.put('/api/claude/apikey', run(async (c) => {
     admin(c);
     const b = await c.req.json().catch(() => ({}));

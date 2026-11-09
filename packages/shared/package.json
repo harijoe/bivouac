@@ -1,7 +1,23 @@
 {
-  "name": "@bivouac/shared", "version": "0.3.0", "type": "module", "private": true,
-  "main": "dist/index.js", "types": "dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
-  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "vitest run" },
-  "dependencies": { "yaml": "^2.6.0" }
+  "name": "@bivouac/shared",
+  "version": "0.3.0",
+  "type": "module",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "tldts": "^7.4.19",
+    "yaml": "^2.6.0"
+  }
 }

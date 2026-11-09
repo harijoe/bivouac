@@ -76,6 +76,40 @@ export class GithubApp {
     if (!r.ok) throw new GithubError(`GitHub API ${r.status}: ${j.message ?? 'error'}`, r.status);
     return j;
   }
+  // ---- public / token lookups
+  /** A GitHub organisation by name, through the public API (no authentication). Null when it does not exist. */
+  async publicOrg(name: string): Promise<{ login: string; name: string | null; avatarUrl: string | null } | null> {
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(name)) return null;
+    const r = await this.fetchImpl(`${API}/orgs/${encodeURIComponent(name)}`, { headers: H });
+    if (r.status === 404) return null;
+    const j: any = await r.json().catch(() => ({}));
+    if (r.status === 403 || r.status === 429) throw new GithubError('GitHub is limiting lookups from this server for a few minutes. Try again shortly.', r.status);
+    if (!r.ok || j.type !== 'Organization') {
+      if (r.ok) return null; // a user account, not an organisation
+      throw new GithubError(`GitHub answered ${r.status}. Try again.`, r.status);
+    }
+    return { login: j.login, name: j.name ?? null, avatarUrl: j.avatar_url ?? null };
+  }
+
+  /**
+   * Checks that a fine-grained token really gives bivouac what it needs on one repository: it can see it, read and
+   * write its contents, and use pull requests. Throws an error that says which permission to fix.
+   */
+  async checkRepoToken(fullName: string, token: string): Promise<{ defaultBranch: string; private: boolean }> {
+    const get = async (path: string) => {
+      const r = await this.fetchImpl(`${API}${path}`, { headers: { ...H, Authorization: `Bearer ${token}` } });
+      return { status: r.status, body: (await r.json().catch(() => ({}))) as any };
+    };
+    const repo = await get(`/repos/${fullName}`);
+    if (repo.status === 401) throw new GithubError('GitHub rejected this token: it is wrong, expired or revoked. Create a new one and paste it again.', 401);
+    if (repo.status === 404 || repo.status === 403) throw new GithubError(`This token cannot access ${fullName}. When creating it, choose “Only select repositories” and pick this one (and check the repository name).`, repo.status);
+    if (repo.status !== 200) throw new GithubError(`GitHub answered ${repo.status} when checking the repository. Try again.`, repo.status);
+    if (repo.body.permissions && !repo.body.permissions.push) throw new GithubError('This token can only read the repository. Give it “Contents: Read and write” so the agent can push its branch.', 403);
+    const pulls = await get(`/repos/${fullName}/pulls?per_page=1`);
+    if (pulls.status === 403 || pulls.status === 404) throw new GithubError('This token cannot use pull requests. Give it “Pull requests: Read and write”.', 403);
+    return { defaultBranch: repo.body.default_branch ?? 'main', private: !!repo.body.private };
+  }
+
   async listInstallations(): Promise<{ id: number; account: string; accountType: string }[]> {
     const j = await this.call('/app/installations?per_page=100', { auth: this.jwt() });
     return (j as any[]).map((i) => ({ id: i.id, account: i.account?.login, accountType: i.account?.type }));

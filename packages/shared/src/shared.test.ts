@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { parseStreamLine, truncateOutput, LineSplitter, parseProjectConfig, mergeConfig, slugify } from './index.js';
+import { parseStreamLine, truncateOutput, LineSplitter, parseProjectConfig, mergeConfig, slugify, dnsPlan } from './index.js';
 
 describe('stream-json parser (real fixture)', () => {
   const lines = readFileSync(new URL('../fixtures/real-run.jsonl', import.meta.url), 'utf8').trim().split('\n');
@@ -72,5 +72,17 @@ describe('bivouac.yml: ports and services', () => {
     expect(() => parseServices({ 'Bad_Name': { image: 'x' } })).toThrow(/service name/);
     expect(() => parseServices({ db: { image: 'x', memory: '1 gig' } })).toThrow(/memory/);
     expect(() => parseServices(Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`s${i}`, { image: 'x' }])))).toThrow(/at most/);
+  });
+});
+
+describe('dnsPlan', () => {
+  const names = (d: string) => dnsPlan(d, '1.2.3.4').records.map((r) => r.name);
+  it('uses @ and * for a root domain', () => { expect(names('bivouac.cloud')).toEqual(['@', '*']); expect(dnsPlan('bivouac.cloud', '1.2.3.4').zone).toBe('bivouac.cloud'); });
+  it('uses names relative to the zone for a subdomain', () => { expect(names('dev.deslope.com')).toEqual(['dev', '*.dev']); expect(names('a.b.deslope.com')).toEqual(['a.b', '*.a.b']); });
+  it('handles multi-level public suffixes', () => {
+    expect(names('mysite.co.uk')).toEqual(['@', '*']);
+    expect(names('bv.mysite.co.uk')).toEqual(['bv', '*.bv']);
+    expect(dnsPlan('bv.mysite.co.uk', '1.2.3.4').zone).toBe('mysite.co.uk');
+    expect(names('app.example.com.au')).toEqual(['app', '*.app']);
   });
 });

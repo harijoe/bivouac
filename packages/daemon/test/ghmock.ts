@@ -29,6 +29,16 @@ export function mockGithub(o: { users?: Record<string, { id: number; login: stri
       const repos = o.repos ?? [{ full_name: 'julien/demo', default_branch: 'main', private: true }];
       return json({ total_count: repos.length, repositories: repos });
     }
+    const org = /^https:\/\/api\.github\.com\/orgs\/([^/]+)$/.exec(url);
+    if (org) return org[1] === 'alpic-ai' ? json({ login: 'alpic-ai', type: 'Organization', name: 'Alpic', avatar_url: 'https://avatars.githubusercontent.com/u/1' }) : org[1] === 'limited' ? json({ message: 'rate limit' }, 403) : json({ message: 'Not Found' }, 404);
+    const repo = /^https:\/\/api\.github\.com\/repos\/([^/]+\/[^/?]+)(\/pulls)?/.exec(url);
+    if (repo && !(auth ?? '').startsWith('Bearer ghs_')) {
+      const tok = (auth ?? '').replace('Bearer ', '');
+      if (!tok.startsWith('github_pat_')) return json({ message: 'Bad credentials' }, 401);
+      if (tok === 'github_pat_otherrepo' || repo[1] !== 'julien/demo') return json({ message: 'Not Found' }, 404);
+      if (repo[2]) return tok === 'github_pat_nopulls' ? json({ message: 'Resource not accessible' }, 403) : json([]);
+      return json({ default_branch: 'trunk', private: true, permissions: { push: tok !== 'github_pat_readonly', pull: true } });
+    }
     const m = /orgs\/([^/]+)\/members\/([^/]+)$/.exec(url);
     if (m) return new Response(null, { status: (o.orgMembers?.[m[1]] ?? []).includes(m[2]) ? 204 : 404 });
     if (url.endsWith('/pulls') && method === 'POST') return json({ html_url: 'https://github.com/julien/demo/pull/1' }, 201);

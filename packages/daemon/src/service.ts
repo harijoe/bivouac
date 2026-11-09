@@ -92,8 +92,14 @@ export class Service {
     const name = slugify(o.name ?? repoUrl.split('/').pop()!.replace(/\.git$/, ''), 24);
     if (this.store.getProjectByName(name)) throw new UserError(`A project named "${name}" already exists. Pick another name.`, 'name_taken', 409);
     let branch: string;
-    try { branch = o.defaultBranch || (await detectDefaultBranch(repoUrl, o.token)); } catch (e: any) { throw new UserError(`Cannot access the repository: ${e.message}`, 'repo_unreachable'); }
     const gh = /github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(repoUrl);
+    if (gh && o.token) {
+      // a GitHub repository with a token: check the token's access and permissions with a clear message before saving
+      try { const info = await this.gh.checkRepoToken(gh[1], o.token); branch = o.defaultBranch || info.defaultBranch; }
+      catch (e: any) { throw new UserError(e.message, 'invalid_token', 400); }
+    } else {
+      try { branch = o.defaultBranch || (await detectDefaultBranch(repoUrl, o.token)); } catch (e: any) { throw new UserError(`Cannot access the repository: ${e.message}`, 'repo_unreachable'); }
+    }
     const p = this.store.createProject({ name, repoUrl, defaultBranch: branch, githubToken: o.token, githubRepo: gh?.[1] ?? null });
     this.auth.audit(actor.label, 'project_added', { project: name, repo: repoUrl, withToken: !!o.token });
     return p;
