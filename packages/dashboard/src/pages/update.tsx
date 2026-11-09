@@ -103,7 +103,7 @@ export function UpdatePage({ loadedVersion }: { loadedVersion: string }) {
           <p className="status-line ok"><i className="dot" />bivouac is up to date.</p>
           <p className="muted">{st.checkedAt ? `Last checked ${ago(st.checkedAt)}.` : 'Not checked yet.'}</p>
           <ErrorNote>{st.error}</ErrorNote>
-          <Button busy={a.busy} onClick={() => act(() => api('POST', '/api/update/check'))}>Check now</Button>
+          <Button busy={a.busy} busyLabel="Checking…" onClick={() => act(() => api('POST', '/api/update/check'))}>Check now</Button>
         </section>
       )}
       {!showProgress && av && (
@@ -116,7 +116,7 @@ export function UpdatePage({ loadedVersion }: { loadedVersion: string }) {
           {st.scheduled ? (
             <section className="card">
               <p className="note">Waiting for {st.runningTasks} running task{st.runningTasks === 1 ? '' : 's'} to finish. The update starts by itself, and no new task starts until then.</p>
-              <Button busy={a.busy} onClick={() => act(() => api('DELETE', '/api/update/schedule'))}>Cancel the update</Button>
+              <Button busy={a.busy} busyLabel="Cancelling…" onClick={() => act(() => api('DELETE', '/api/update/schedule'))}>Cancel the update</Button>
             </section>
           ) : !st.canUpdate ? (
             <p className="note">Updates from the dashboard are not available on this installation. Run the installer again over SSH to update.</p>
@@ -138,7 +138,7 @@ export function UpdatePage({ loadedVersion }: { loadedVersion: string }) {
               ) : <p className="muted">No task is running.</p>}
               <ErrorNote>{a.error}</ErrorNote>
               <div className="actions">
-                <Button variant={mode === 'now' && st.runningTasks > 0 ? 'danger' : 'primary'} busy={a.busy} onClick={() => act(async () => { startedHere.current = true; await api('POST', '/api/update/start', { mode: st.runningTasks > 0 ? mode : 'idle' }); })}>
+                <Button variant={mode === 'now' && st.runningTasks > 0 ? 'danger' : 'primary'} busy={a.busy} busyLabel="Starting the update…" onClick={() => act(async () => { startedHere.current = true; await api('POST', '/api/update/start', { mode: st.runningTasks > 0 ? mode : 'idle' }); })}>
                   {st.runningTasks > 0 ? (mode === 'now' ? 'Stop the tasks and update now' : 'Update when tasks are done') : 'Update now'}
                 </Button>
                 <Button variant="ghost" onClick={() => setConfirming(false)}>Cancel</Button>
@@ -163,7 +163,7 @@ export function VersionSection({ version }: { version: string }) {
       {st && <p className="muted">{st.checkedAt ? `Last checked ${ago(st.checkedAt)}.` : 'Not checked yet.'}</p>}
       <ErrorNote>{st?.error || a.error}</ErrorNote>
       <div className="actions">
-        <Button busy={a.busy} onClick={() => a.run(async () => { await api('POST', '/api/update/check'); await reload(); })}>Check now</Button>
+        <Button busy={a.busy} busyLabel="Checking…" onClick={() => a.run(async () => { await api('POST', '/api/update/check'); await reload(); })}>Check now</Button>
       </div>
       {st && (
         <label className="choice">

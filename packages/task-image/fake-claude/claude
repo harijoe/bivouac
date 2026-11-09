@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Fake `claude` CLI for tests: emits realistic stream-json (shape copied from a real capture),
 // edits a file and commits. Scenario is chosen with markers in the first prompt:
-//   FAKE_SCENARIO=succeed | fail-then-succeed | always-fail   (default: succeed)
+//   FAKE_SCENARIO=succeed | fail-then-succeed | always-fail | stuck | blocked   (default: succeed)
+//   stuck: changes nothing after the first run; blocked: declares itself blocked (.bivouac/blocked.md next to the repo)
 //   FAKE_COST=<usd per invocation>   FAKE_DELAY=<ms between events>   FAKE_CRASH=1 (exit 1 w/o result)
 // The scenario is persisted in .bivouac/fake-state.json so --resume invocations keep it.
 import { readFileSync, writeFileSync, mkdirSync, existsSync, appendFileSync } from 'node:fs';
@@ -59,10 +60,14 @@ const file = 'fake-output.txt';
 await emit({ type: 'system', subtype: 'init', cwd: process.cwd(), model: 'fake-model', tools: ['Read', 'Edit', 'Bash'], permissionMode: 'bypassPermissions' });
 await emit(msg([{ type: 'text', text: `Run #${state.runs}${resume ? ' (resumed)' : ''}: working on it. Prompt starts with: ${prompt.slice(0, 80).replace(/\n/g, ' ')}` }], 20));
 if (state.crash) { console.error('fake crash'); process.exit(1); }
+if (state.scenario === 'blocked') {
+  mkdirSync('../.bivouac', { recursive: true });
+  writeFileSync('../.bivouac/blocked.md', 'This repository requires Node >= 26 and I cannot install it without root.\nI need: a runtime entry in bivouac.yml or a different Node version.\n');
+}
+const quiet = state.scenario === 'stuck' && state.runs >= 2;
 const toolId = 'toolu_' + randomUUID().slice(0, 12);
 await emit(msg([{ type: 'tool_use', id: toolId, name: 'Edit', input: { file_path: `${process.cwd()}/${file}`, new_string: good ? 'ok' : 'bad' } }], 30));
-writeFileSync(file, good ? 'ok\n' : 'bad\n');
-appendFileSync('fake-log.txt', `run ${state.runs}\n`);
+if (!quiet) { writeFileSync(file, good ? 'ok\n' : 'bad\n'); appendFileSync('fake-log.txt', state.scenario === 'stuck' ? 'x\n' : `run ${state.runs}\n`); }
 await emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: `Wrote ${file}` }] }, parent_tool_use_id: null, uuid: randomUUID() });
 try { execSync(`git add -A -- ${file} fake-log.txt && git -c user.name=fake -c user.email=fake@example.com commit -q -m "fake claude run ${state.runs}"`, { stdio: 'ignore' }); } catch { /* not a git repo or nothing to commit */ }
 await emit(msg([{ type: 'text', text: good ? 'Done: the feature works.' : 'I made a change but it may not be right.' }], 25));

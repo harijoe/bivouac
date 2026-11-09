@@ -48,7 +48,7 @@ export function Authorize() {
       <ul className="rights">{info.rights.map((r) => <li key={r}>{r}</li>)}</ul>
       <ErrorNote>{a.error}</ErrorNote>
       <div className="actions stretch">
-        <Button variant="primary" busy={a.busy} onClick={() => decide('approve')}>Allow</Button>
+        <Button variant="primary" busy={a.busy} busyLabel="Allowing…" onClick={() => decide('approve')}>Allow</Button>
         <Button variant="ghost" onClick={() => decide('deny')}>Cancel</Button>
       </div>
       <p className="muted small">You can disconnect it at any time in Settings.</p>

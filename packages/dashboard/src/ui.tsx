@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { TaskStatus } from '@bivouac/shared';
+import { dnsPlan, type TaskStatus } from '@bivouac/shared';
 
 // ---------- routing (History API; the server falls back to index.html)
 export function navigate(to: string, replace = false) {
@@ -39,7 +39,8 @@ export function useNow(active: boolean) {
 export const STATUS: Record<TaskStatus, { label: string; tone: 'working' | 'done' | 'failed' | 'warn' | 'idle' }> = {
   queued: { label: 'Waiting', tone: 'idle' }, starting: { label: 'Starting', tone: 'working' }, running: { label: 'Working', tone: 'working' },
   checking: { label: 'Checking', tone: 'working' }, succeeded: { label: 'Done', tone: 'done' }, failed: { label: 'Failed', tone: 'failed' },
-  budget_exceeded: { label: 'Budget reached', tone: 'warn' }, max_iterations: { label: 'Out of attempts', tone: 'warn' }, stopped: { label: 'Stopped', tone: 'idle' },
+  budget_exceeded: { label: 'Budget reached', tone: 'warn' }, max_iterations: { label: 'Out of attempts', tone: 'warn' }, stopped: { label: 'Stopped', tone: 'idle'},
+  blocked: { label: 'Needs you', tone: 'warn' }, stuck: { label: 'Stuck', tone: 'warn' },
 };
 export const StatusPill = ({ s }: { s: TaskStatus }) => <span className={`pill tone-${STATUS[s].tone}`}><i className="dot" />{STATUS[s].label}</span>;
 export const statusHint = (s: TaskStatus): string | null => ({
@@ -47,11 +48,25 @@ export const statusHint = (s: TaskStatus): string | null => ({
   max_iterations: 'The agent used all its attempts. Resume to give it more, or send an instruction.',
   failed: 'Something went wrong. Check the message below, then resume.',
   stopped: 'Stopped. Resume to continue where it left off.',
+  blocked: 'The agent cannot continue without you. Read what it needs below, answer in a message, then resume.',
+  stuck: 'The same check failed twice with no change to the code, so the task was stopped to save tokens. Send an instruction to give it a new direction.',
 } as Partial<Record<TaskStatus, string>>)[s] ?? null;
 
 // ---------- small building blocks
-export function Button({ children, variant = 'secondary', busy, ...p }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'danger' | 'ghost'; busy?: boolean }) {
-  return <button {...p} className={`btn ${variant} ${p.className ?? ''}`} disabled={p.disabled || busy}>{busy ? 'Please wait…' : children}</button>;
+/**
+ * A button that waits for something shows a spinner and an explicit label (`busyLabel`) and cannot be clicked twice.
+ * `busy` is for forms; a click handler that returns a promise gets the same treatment on its own button automatically.
+ */
+export function Button({ children, variant = 'secondary', busy, busyLabel, onClick, ...p }: Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'onClick'> & { variant?: 'primary' | 'secondary' | 'danger' | 'ghost'; busy?: boolean; busyLabel?: string; onClick?: (e: React.MouseEvent<HTMLButtonElement>) => unknown }) {
+  const [own, setOwn] = useState(false);
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+  const waiting = !!busy || own;
+  const click = onClick && (async (e: React.MouseEvent<HTMLButtonElement>) => {
+    const r = onClick(e);
+    if (r instanceof Promise) { setOwn(true); try { await r; } finally { if (alive.current) setOwn(false); } }
+  });
+  return <button {...p} onClick={click} className={`btn ${variant} ${p.className ?? ''}`} disabled={p.disabled || waiting} aria-busy={waiting || undefined}>{waiting ? <><i className="spin" aria-hidden="true" />{busyLabel ?? 'Please wait…'}</> : children}</button>;
 }
 export function Empty({ title, children }: { icon?: string; title: string; children?: ReactNode }) {
   return <div className="empty"><img className="empty-icon" src="/favicon.svg" alt="" width="36" height="36" /><p className="empty-title">{title}</p>{children}</div>;
@@ -93,4 +108,18 @@ export function useTheme() {
     localStorage.setItem('bv-theme', theme);
   }, [theme]);
   return [theme, setTheme] as const;
+}
+
+/** The two A records to create at the registrar, with names relative to the zone (`@` and `*` for a root domain). */
+export function DnsRecords({ domain, ip }: { domain: string; ip: string | null }) {
+  const plan = dnsPlan(domain, ip ?? 'this server’s IP');
+  return (
+    <div className="dns">
+      <p className="muted">At your registrar, in the DNS zone of <b>{plan.zone}</b>, create these two records:</p>
+      <table><thead><tr><th>Type</th><th>Name</th><th>Value</th></tr></thead><tbody>
+        {plan.records.map((r) => <tr key={r.name}><td>{r.type}</td><td><code>{r.name}</code></td><td><code>{r.value}</code></td></tr>)}
+      </tbody></table>
+      <p className="muted">Some registrars want the full name instead of <code>@</code>: that is <code>{domain}</code>.</p>
+    </div>
+  );
 }

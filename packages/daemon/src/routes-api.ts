@@ -38,7 +38,7 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     if (!t) throw new UserError('This task does not exist (anymore).', 'unknown_task', 404);
     return t;
   };
-  const view = (t: Task) => ({ ...t, dashboardUrl: svc.taskUrl(t), pendingInstructions: store.pendingInstructionCount(t.id), active: ctx.mgr.isActive(t.id) });
+  const view = (t: Task) => ({ ...t, costKind: svc.costKind(), dashboardUrl: svc.taskUrl(t), pendingInstructions: store.pendingInstructionCount(t.id), active: ctx.mgr.isActive(t.id) });
 
   app.get('/api/totals', (c) => c.json(store.totals()));
 

@@ -16,7 +16,7 @@ export function TaskCard({ t, now }: { t: TaskView; now: number }) {
       <div className="task-top"><span className="task-name">{t.name}</span><StatusPill s={t.status} /></div>
       <p className="task-title">{t.title}</p>
       <div className="task-meta">
-        <span>{fmtUsd(t.usage.costUsd)}</span>
+        <span title={t.costKind === 'cost' ? 'Cost' : 'Estimated API-equivalent value, not a spend (Claude subscription)'}>{fmtUsd(t.usage.costUsd)}{t.costKind === 'cost' ? '' : ' est.'}</span>
         <span>{isTerminal(t.status) ? ago(t.finishedAt, now) : `attempt ${Math.max(1, t.iteration)} of ${t.maxIterations}`}</span>
         {t.devPort && t.status !== 'queued' && <button className="link-btn" onClick={open}>Open preview ↗</button>}
       </div>
@@ -58,7 +58,7 @@ export function Home({ session }: Props) {
       )}
       {tasks.length > 0 && (
         <p className="summary">
-          <span><b>{working}</b> working</span><span><b>{done}</b> done</span><span><b>{fmtUsd(spent)}</b> spent</span>
+          <span><b>{working}</b> working</span><span><b>{done}</b> done</span><span><b>{fmtUsd(spent)}</b> {tasks[0]?.costKind === 'cost' ? 'spent' : 'estimated API equivalent'}</span>
         </p>
       )}
       {projects.length === 0 && !next && <Empty title="No project yet"><p className="muted">Ask an administrator to add a GitHub repository.</p></Empty>}

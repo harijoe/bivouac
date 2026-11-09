@@ -18,7 +18,7 @@ const TASK = z.string().describe('Task name, unique inside the project, for exam
 export function buildMcpServer(svc: Service, actor: Actor): McpServer {
   const server = new McpServer({ name: 'bivouac', version: process.env.BIVOUAC_VERSION ?? 'dev' }, {
     instructions: 'bivouac runs Claude Code agents in isolated containers, one task per agent, each with a live preview URL. ' +
-      'Typical flow: list_projects, then create_task (it returns immediately), then poll get_task until the status is succeeded, failed, budget_exceeded, max_iterations or stopped. ' +
+      'Typical flow: list_projects, then create_task (it returns immediately), then poll get_task until the status is succeeded, failed, budget_exceeded, max_iterations, stopped, blocked or stuck. A blocked task states in `error` what it needs: answer with resume_task and an instruction. ' +
       'Before proposing a new mission, call get_project_context (or use the plan_next_mission prompt) to see where the project stands. Share the previewUrl with the user. Use send_instruction to steer a running task and push_branch / open_pr to deliver the work.',
   });
   const tool = <S extends z.ZodRawShape>(name: string, title: string, description: string, annotations: Ann, schema: S, fn: (a: z.infer<z.ZodObject<S>>) => Promise<unknown> | unknown) =>
@@ -32,14 +32,14 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
   tool('list_projects', 'List projects', 'List the projects (GitHub repositories) bivouac can work on, with their task counts and total cost. Call this first to get valid project names. Projects are added by the user in the dashboard, not through this tool.', READ, {},
     () => svc.listProjects().map((p) => ({ name: p.name, repository: p.githubRepo ?? p.repoUrl, defaultBranch: p.defaultBranch, tasks: p.totals.tasks, totalCostUsd: Number(p.totals.costUsd.toFixed(4)) })));
 
-  tool('list_tasks', 'List tasks', 'List tasks with their status, cost and preview URL, newest first. Optionally filter by project or status. Statuses: queued, starting, running, checking (running the success command), succeeded, failed, budget_exceeded, max_iterations, stopped.', READ,
+  tool('list_tasks', 'List tasks', 'List tasks with their status, cost and preview URL, newest first. Optionally filter by project or status. Statuses: queued, starting, running, checking (running the success command), succeeded, failed, budget_exceeded, max_iterations, stopped, blocked (the agent cannot continue and says what it needs: answer with resume_task and a message), stuck (the same check failed twice with no code change). costUsd is the API-equivalent estimate when costKind is estimated_api_equivalent (Claude subscription: not a spend).', READ,
     { project: PROJECT.optional(), status: z.string().optional().describe('Only tasks with this status.') },
     (a) => {
       const p = a.project ? svc.resolveProject(a.project) : null;
       return svc.store.listTasks(p?.id).filter((t) => !a.status || t.status === a.status).map((t) => svc.summary(t));
     });
 
-  tool('get_task', 'Get task details', 'Get one task: status, iteration, cost, the last messages from the agent (summarised), the result of the last success check, the preview URL, the dashboard link, the PR link and active share links. Poll this after create_task until the status is final.', READ,
+  tool('get_task', 'Get task details', 'Get one task: status, iteration, cost (costKind says whether it is a real cost or an API-equivalent estimate on a subscription), the reason when blocked or stuck (error), the last messages from the agent (summarised), the result of the last success check, the preview URL, the dashboard link, the PR link and active share links. Poll this after create_task until the status is final.', READ,
     { project: PROJECT, task: TASK },
     (a) => svc.describeTask(svc.resolveTask(a.project, a.task)));
 
@@ -73,7 +73,7 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
     { project: PROJECT, task: TASK },
     async (a) => svc.summary(await svc.stopTask(svc.resolveTask(a.project, a.task), actor)));
 
-  tool('resume_task', 'Resume a task', 'Continue a stopped or finished task (failed, budget_exceeded, max_iterations, stopped) with a fresh iteration allowance. Optionally add an instruction.', WRITE,
+  tool('resume_task', 'Resume a task', 'Continue a stopped or finished task (failed, budget_exceeded, max_iterations, stopped, blocked, stuck) with a fresh iteration allowance. Optionally add an instruction.', WRITE,
     { project: PROJECT, task: TASK, text: z.string().optional().describe('Optional instruction to give when resuming.') },
     async (a) => svc.summary(await svc.resumeTask(svc.resolveTask(a.project, a.task), actor, a.text)));
 

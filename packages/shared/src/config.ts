@@ -11,8 +11,9 @@ export interface ServiceConfig {
 }
 
 export interface ProjectConfig {
-  image?: string;
   setup?: string;
+  /** Tool versions forced for the task (`node: "26"`, `python: "3.12"`…); wins over what the repository declares. */
+  runtime?: Record<string, string>;
   dev?: { command: string; port?: number };
   /** Named ports of the app, in order; the first one is the primary port (URL without a name prefix). */
   ports?: Record<string, number>;
@@ -86,6 +87,25 @@ export function parseServices(sv: unknown): Record<string, ServiceConfig> {
   return out;
 }
 
+export const MAX_RUNTIME_TOOLS = 8;
+const TOOL_RE = /^[a-z][a-z0-9_-]{0,30}$/;
+const TOOL_VERSION_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$/;
+/** `runtime:` section: tool name -> version (a YAML number such as 26 or 3.12 is accepted; quote "3.10" to keep the zero). */
+export function parseRuntime(rt: unknown): Record<string, string> {
+  if (typeof rt !== 'object' || !rt || Array.isArray(rt)) throw new Error('runtime must be a mapping of tool to version, for example { node: "26", python: "3.12" }');
+  const entries = Object.entries(rt);
+  if (entries.length > MAX_RUNTIME_TOOLS) throw new Error(`runtime: at most ${MAX_RUNTIME_TOOLS} tools`);
+  const out: Record<string, string> = {};
+  for (const [tool, v] of entries) {
+    if (!TOOL_RE.test(tool)) throw new Error(`runtime: invalid tool name "${tool}"`);
+    if (typeof v !== 'string' && typeof v !== 'number') throw new Error(`runtime.${tool} must be a version such as "26"`);
+    const ver = String(v);
+    if (!TOOL_VERSION_RE.test(ver)) throw new Error(`runtime.${tool}: invalid version "${ver}"`);
+    out[tool] = ver;
+  }
+  return out;
+}
+
 /** Parse and validate a bivouac.yml document. Throws on invalid input. */
 export function parseProjectConfig(text: string): ProjectConfig {
   const raw = parse(text) ?? {};
@@ -99,7 +119,8 @@ export function parseProjectConfig(text: string): ProjectConfig {
     return v as number | undefined;
   };
   const cfg: ProjectConfig = {};
-  if (raw.image !== undefined) cfg.image = str('image', raw.image);
+  if (raw.image !== undefined) throw new Error('`image` is no longer supported: the task image cannot be replaced. Choose tool versions with `runtime:` (for example `runtime: { node: "26" }`) and install the rest in `setup:`.');
+  if (raw.runtime !== undefined) cfg.runtime = parseRuntime(raw.runtime);
   if (raw.setup !== undefined) cfg.setup = str('setup', raw.setup);
   if (raw.success !== undefined) cfg.success = str('success', raw.success);
   if (raw.ports !== undefined) {
@@ -182,4 +203,15 @@ export function compareSemver(a: string, b: string): number {
   if (x.pre === null) return 1;
   if (y.pre === null) return -1;
   return x.pre < y.pre ? -1 : 1;
+}
+
+/** A short plain-text title from the first line of a prompt: Markdown syntax (headings, emphasis, links, code) removed. */
+export function titleFromPrompt(prompt: string, max = 80): string {
+  const first = prompt.split('\n').map((l) => l.trim()).find((l) => l && !/^(```|~~~|---+|===+|\*\*\*+)$/.test(l)) ?? '';
+  const t = first
+    .replace(/^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+/, '')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/(\*\*|__|~~|`|\*|(?<![A-Za-z0-9])_|_(?![A-Za-z0-9]))/g, '')
+    .replace(/\s+/g, ' ').trim();
+  return t.slice(0, max).trim() || 'Untitled task';
 }

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { Button, CopyField, ErrorNote, navigate, Spinner, useAsync } from '../ui';
+import { Button, CopyField, DnsRecords, ErrorNote, navigate, Spinner, useAsync } from '../ui';
 import { ChatConnect, ClaudeConnect, claudeSummary } from './connect';
-import { RepoPicker } from './settings';
+import { RepoPicker, TokenAction } from './settings';
 
 interface SetupState {
   domain: string; baseUrl: string; publicIp: string | null; sslip: boolean; githubConfigured: boolean; appSlug: string | null; installUrl: string | null;
@@ -26,7 +26,6 @@ function DomainStep({ st, code, next }: { st: SetupState; code: string; next: ()
   const [info, setInfo] = useState('');
   const a = useAsync();
   const d = domain.trim().toLowerCase();
-  const sub = d.split('.')[0] || 'bv';
   const stop = useRef(false);
   useEffect(() => () => { stop.current = true; }, []);
   const verify = () => a.run(async () => {
@@ -55,19 +54,11 @@ function DomainStep({ st, code, next }: { st: SetupState; code: string; next: ()
       <h2>Choose your address</h2>
       <p>Your bivouac is reachable at <b>{st.domain}</b>. That works as is. To use your own domain instead, enter it below.</p>
       <input placeholder="bv.example.com" value={domain} onChange={(e) => setDomain(e.target.value)} aria-label="Your domain" />
-      {d.includes('.') && (
-        <div className="dns">
-          <p className="muted">At your domain registrar, create these two records:</p>
-          <table><tbody>
-            <tr><td>A</td><td><code>{sub}</code></td><td><code>{st.publicIp ?? 'this server’s IP'}</code></td></tr>
-            <tr><td>A</td><td><code>*.{sub}</code></td><td><code>{st.publicIp ?? 'this server’s IP'}</code></td></tr>
-          </tbody></table>
-        </div>
-      )}
+      {d.includes('.') && <DnsRecords domain={d} ip={st.publicIp} />}
       {phase !== 'idle' && <p className="note">{info}</p>}
       <ErrorNote>{a.error}</ErrorNote>
       <div className="actions">
-        <Button variant={d.includes('.') ? 'primary' : 'secondary'} disabled={!d.includes('.') || phase !== 'idle'} busy={phase !== 'idle'} onClick={verify}>Verify</Button>
+        <Button variant={d.includes('.') ? 'primary' : 'secondary'} disabled={!d.includes('.') || phase !== 'idle'} busy={phase !== 'idle'} busyLabel={phase === 'cert' ? 'Getting the certificate…' : 'Waiting for the DNS records…'} onClick={verify}>Verify</Button>
         <Button variant={d.includes('.') ? 'ghost' : 'primary'} onClick={next}>Keep {st.sslip ? 'this address' : st.domain}</Button>
       </div>
     </section>
@@ -75,20 +66,50 @@ function DomainStep({ st, code, next }: { st: SetupState; code: string; next: ()
 }
 
 function GithubStep({ st }: { st: SetupState }) {
+  const [kind, setKind] = useState<'personal' | 'org'>('personal');
   const [org, setOrg] = useState('');
-  const [useOrg, setUseOrg] = useState(false);
+  const [lookup, setLookup] = useState<{ state: 'idle' | 'checking' | 'found' | 'missing' | 'error'; name?: string | null; avatarUrl?: string | null; login?: string; message?: string }>({ state: 'idle' });
   const form = useRef<HTMLFormElement>(null);
   const [manifest, setManifest] = useState<{ action: string; manifest: string } | null>(null);
   const a = useAsync();
   useEffect(() => { if (manifest) form.current?.submit(); }, [manifest]);
+  // validate the organisation while typing (debounced), through GitHub's public API
+  useEffect(() => {
+    const name = org.trim();
+    if (kind !== 'org' || !name) { setLookup({ state: 'idle' }); return; }
+    setLookup({ state: 'checking' });
+    let live = true;
+    const t = setTimeout(() => {
+      api('GET', `/api/setup/github/org?name=${encodeURIComponent(name)}`)
+        .then((r) => { if (live) setLookup(r.found ? { state: 'found', name: r.name, avatarUrl: r.avatarUrl, login: r.login } : { state: 'missing' }); })
+        .catch((e) => { if (live) setLookup({ state: 'error', message: (e as Error).message }); });
+    }, 400);
+    return () => { live = false; clearTimeout(t); };
+  }, [org, kind]);
+  const ready = kind === 'personal' || lookup.state === 'found';
   return (
     <section className="card">
       <h2>Connect GitHub</h2>
       <p>bivouac creates a private GitHub app that only belongs to you. It is used to sign you in and to access the repositories you choose, nothing else.</p>
-      <label className="check"><input type="checkbox" checked={useOrg} onChange={(e) => setUseOrg(e.target.checked)} /> Create it under an organisation</label>
-      {useOrg && <input placeholder="organisation name" value={org} onChange={(e) => setOrg(e.target.value)} aria-label="Organisation" />}
+      <fieldset className="choices">
+        <legend className="muted">Where should the app live?</legend>
+        <label className="choice"><input type="radio" name="owner" checked={kind === 'personal'} onChange={() => setKind('personal')} />
+          <span><b>Personal account</b> <span className="tag">recommended</span><br /><span className="muted">Recommended. You can add repositories from an organisation later, one at a time, with a fine-grained token.</span></span></label>
+        <label className="choice"><input type="radio" name="owner" checked={kind === 'org'} onChange={() => setKind('org')} />
+          <span><b>Organisation</b></span></label>
+      </fieldset>
+      {kind === 'org' && (
+        <div className="stack">
+          <p className="note warn">The app will be visible to the owners of the organisation, and its commits and pull requests will appear under the bot’s name. You must be an owner of the organisation; otherwise GitHub sends an approval request to the owners.</p>
+          <input placeholder="organisation name" value={org} onChange={(e) => setOrg(e.target.value)} aria-label="Organisation" autoComplete="off" autoCapitalize="none" spellCheck={false} />
+          {lookup.state === 'checking' && <p className="muted" role="status"><i className="spin" aria-hidden="true" />Looking up the organisation…</p>}
+          {lookup.state === 'found' && <p className="org-found" role="status">{lookup.avatarUrl && <img src={lookup.avatarUrl} alt="" width="32" height="32" />}<span><b>{lookup.name ?? lookup.login}</b> <span className="muted">github.com/{lookup.login}</span></span></p>}
+          {lookup.state === 'missing' && <p className="note error" role="alert">Organisation not found. Check the name as it appears in github.com/&lt;name&gt;.</p>}
+          {lookup.state === 'error' && <p className="note error" role="alert">{lookup.message}</p>}
+        </div>
+      )}
       <ErrorNote>{a.error}</ErrorNote>
-      <Button variant="primary" busy={a.busy} disabled={useOrg && !org} onClick={() => a.run(async () => setManifest(await api('POST', '/api/setup/github/manifest', { organization: useOrg ? org : undefined })))}>Continue to GitHub</Button>
+      <Button variant="primary" busy={a.busy} busyLabel="Preparing the GitHub app…" disabled={!ready} onClick={() => a.run(async () => setManifest(await api('POST', '/api/setup/github/manifest', { organization: kind === 'org' ? (lookup.login ?? org.trim()) : undefined })))}>Continue to GitHub</Button>
       <p className="muted">GitHub will ask you to confirm the app name, then bring you back here. {st.githubConfigured ? 'A previous app exists and will be replaced.' : ''}</p>
       {manifest && <form ref={form} method="post" action={manifest.action}><input type="hidden" name="manifest" value={manifest.manifest} /></form>}
     </section>
@@ -133,7 +154,7 @@ export function Setup({ onFinished }: { onFinished: () => void }) {
         <section className="card">
           <h2>Choose your repositories</h2>
           {st.installed ? <p>These repositories are shared with bivouac. Add the ones you want to work on.</p> : <p>Tell GitHub which repositories bivouac may use. You can change this at any time.</p>}
-          {st.installed ? <RepoPicker onAdded={load} /> : <a className="btn primary" href={st.installUrl ?? '#'}>Choose repositories on GitHub</a>}
+          {st.installed ? <RepoPicker onAdded={load} /> : <div className="stack"><a className="btn primary" href={st.installUrl ?? '#'}>Choose repositories on GitHub</a><TokenAction onAdded={load} /></div>}
           <div className="actions"><Button variant={st.installed ? 'primary' : 'ghost'} onClick={() => go('claude')}>{st.installed ? 'Continue' : 'Skip for now'}</Button></div>
         </section>
       )}

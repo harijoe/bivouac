@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { EventEmitter } from 'node:events';
-import { emptyUsage, type PortDef, type ServiceConfig, type EventKind, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Usage } from '@bivouac/shared';
+import { emptyUsage, TERMINAL_STATUSES, type PortDef, type ServiceConfig, type EventKind, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Usage } from '@bivouac/shared';
 import { decrypt, encrypt } from './crypto.js';
 import type { RouteTask } from './routes.js';
 
@@ -202,7 +202,7 @@ export class Store {
     return task;
   }
   setStatus(id: number, status: TaskStatus, error?: string | null) {
-    const terminal = ['succeeded', 'failed', 'budget_exceeded', 'max_iterations', 'stopped'].includes(status);
+    const terminal = (TERMINAL_STATUSES as string[]).includes(status);
     this.db.prepare(`UPDATE tasks SET status=?, error=?, started_at=CASE WHEN ? AND started_at IS NULL THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE started_at END, finished_at=CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END WHERE id=?`)
       .run(status, error ?? null, status === 'starting' ? 1 : 0, terminal ? 1 : 0, id);
     this.addEvent(id, 'status', { status, error: error ?? null });

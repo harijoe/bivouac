@@ -5,13 +5,13 @@ import path from 'node:path';
 export interface GitResult { code: number; stdout: string; stderr: string }
 
 /** Run git on the host. The token is injected as an HTTP header (never written to .git/config). */
-export function git(args: string[], o: { cwd?: string; token?: string | null; uid?: number } = {}): Promise<GitResult> {
+export function git(args: string[], o: { cwd?: string; token?: string | null; uid?: number; env?: Record<string, string> } = {}): Promise<GitResult> {
   const pre = ['-c', 'safe.directory=*', '-c', 'credential.helper='];
   if (o.token) pre.push('-c', `http.extraheader=Authorization: Basic ${Buffer.from(`x-access-token:${o.token}`).toString('base64')}`);
   const asRoot = typeof process.getuid === 'function' && process.getuid() === 0 && o.uid !== undefined;
   return new Promise((resolve) => {
     const p = spawn('git', [...pre, ...args], {
-      cwd: o.cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(asRoot ? { HOME: '/tmp' } : {}) },
+      cwd: o.cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(asRoot ? { HOME: '/tmp' } : {}), ...o.env },
       ...(asRoot ? { uid: o.uid, gid: o.uid } : {}),
     });
     let stdout = '', stderr = '';

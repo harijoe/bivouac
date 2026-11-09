@@ -1,4 +1,4 @@
-import { mergeConfig, parseProjectConfig, slugify, validateTaskName, type Project, type Task } from '@bivouac/shared';
+import { mergeConfig, parseProjectConfig, slugify, titleFromPrompt, validateTaskName, type Project, type Task } from '@bivouac/shared';
 import type { DaemonConfig } from './config.js';
 import { baseUrl } from './config.js';
 import type { Auth } from './auth.js';
@@ -20,7 +20,7 @@ export interface Actor { kind: 'user' | 'mcp' | 'system'; label: string }
 
 export interface TaskSummary {
   id: number; name: string; project: string; title: string; status: string; iteration: number; maxIterations: number;
-  costUsd: number; maxCostUsd: number; tokens: number; previewUrl: string | null; dashboardUrl: string; prUrl: string | null; pushed: boolean;
+  costUsd: number; /** 'estimated_api_equivalent' with a subscription (not a spend), 'cost' with an API key. */ costKind: 'estimated_api_equivalent' | 'cost'; maxCostUsd: number; tokens: number; previewUrl: string | null; dashboardUrl: string; prUrl: string | null; pushed: boolean;
   branch: string; error: string | null; createdAt: string; finishedAt: string | null;
   /** Every exposed port with its URL (the main one first). */
   urls: { name: string; port: number; main: boolean; url: string }[];
@@ -39,6 +39,15 @@ export class Service {
   base() { return baseUrl(this.cfg); }
   dashboardUrl(path = '') { return this.base() + path; }
   taskUrl(t: Pick<Task, 'projectName' | 'name'>) { return this.dashboardUrl(`/projects/${t.projectName}/${t.name}`); }
+
+  /**
+   * With a subscription the CLI's cost is the API-equivalent estimate, not money spent; only an API key is billed per token.
+   * The dollar budget still bounds consumption in both cases.
+   */
+  costKind(): 'estimated_api_equivalent' | 'cost' {
+    const key = this.store.getSecretSetting('anthropic_api_key') ?? this.cfg.apiKey;
+    return key ? 'cost' : 'estimated_api_equivalent';
+  }
 
   // ---- Claude credentials
   claudeStatus(): { connected: boolean; kind: 'oauth' | 'apikey' | null; expiresAt: string | null; expired: boolean } {
@@ -116,7 +125,7 @@ export class Service {
   summary(t: Task): TaskSummary {
     return {
       id: t.id, name: t.name, project: t.projectName, title: t.title, status: t.status, iteration: t.iteration, maxIterations: t.maxIterations,
-      costUsd: t.usage.costUsd, maxCostUsd: t.maxCostUsd, tokens: t.usage.inputTokens + t.usage.outputTokens + t.usage.cacheCreationTokens,
+      costUsd: t.usage.costUsd, costKind: this.costKind(), maxCostUsd: t.maxCostUsd, tokens: t.usage.inputTokens + t.usage.outputTokens + t.usage.cacheCreationTokens,
       previewUrl: t.previewUrl, dashboardUrl: this.taskUrl(t), prUrl: t.prUrl, pushed: t.pushed, branch: t.branch, error: t.error, createdAt: t.createdAt, finishedAt: t.finishedAt,
       urls: t.ports.map((p) => ({ name: p.name, port: p.port, main: p.primary, url: p.url })), services: t.services, configError: t.configError,
     };
@@ -164,7 +173,7 @@ export class Service {
     const maxCostUsd = num(o.maxCostUsd, eff.budget?.max_cost_usd ?? 20);
     if (![maxIterations, maxCostUsd].every((n) => Number.isFinite(n) && n > 0)) throw new UserError('maxIterations and maxCostUsd must be positive numbers.', 'invalid');
     const task = this.store.createTask({
-      projectId: p.id, name: o.name, title: prompt.split('\n')[0].slice(0, 80), prompt, successCommand: String(o.successCommand || eff.success || 'true'),
+      projectId: p.id, name: o.name, title: titleFromPrompt(prompt), prompt, successCommand: String(o.successCommand || eff.success || 'true'),
       baseBranch, maxIterations, maxCostUsd, maxTokens: o.maxTokens ? Number(o.maxTokens) : eff.budget?.max_tokens ?? null,
     }, (id) => `agent/t-${id}-${o.name}`);
     if (o.idempotencyKey) this.store.db.prepare('INSERT OR IGNORE INTO idempotency(key, project_id, task_id) VALUES (?,?,?)').run(o.idempotencyKey, p.id, task.id);

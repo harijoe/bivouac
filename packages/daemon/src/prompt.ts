@@ -13,6 +13,8 @@ export interface PromptContext {
   ports?: { name: string; port: number; primary: boolean; url: string }[];
   configError?: string | null;
   services?: { name: string; image: string; env?: Record<string, string> }[];
+  /** Tool versions installed for the task, as `node 26, pnpm 11`. */
+  runtime?: string;
 }
 
 /** What the agent needs to know about ports and sidecars, and how to change them. Shown at every session start. */
@@ -31,6 +33,17 @@ export function describeEnvironment(c: Pick<PromptContext, 'ports' | 'services'>
   return out;
 }
 
+/** Tool versions, and what to do when the agent cannot go on. Part of the system prompt of every task. */
+export function describeTooling(runtime?: string): string[] {
+  return [
+    runtime
+      ? `- Tool versions already installed for this task and on your PATH: ${runtime} (taken from the repository's own files such as .nvmrc, package.json "engines", mise.toml, or from \`runtime:\` in bivouac.yml).`
+      : '- The tools of the base image are available (Node.js, pnpm, git).',
+    '- If you need another tool or version, you may install it without root: try it with `mise exec python@3.12 -- python script.py`, then make it reproducible by adding it under `runtime:` in `bivouac.yml` (for example `runtime: { node: "26", python: "3.12" }`) or in the `setup:` command, and commit that. It is installed again at the start of your next session. Never edit the repository to get around a version requirement (`engines`, `.nvmrc`, lockfile versions…).',
+    '- If you cannot go on (something is needed that requires root such as system packages, a secret, a decision from the user, access you do not have), do not keep trying and do not loop: write what blocks you and what you expect from the user to `/workspace/.bivouac/blocked.md` (outside the repository), then end your turn. The task then goes to "blocked" and waits for the user instead of burning tokens.',
+  ];
+}
+
 export function buildInitialPrompt(c: PromptContext): string {
   return [
     c.prompt.trim(),
@@ -43,6 +56,7 @@ export function buildInitialPrompt(c: PromptContext): string {
       : '- No dev server is configured.',
     `- Success criterion: this command must exit with status 0 — \`${c.successCommand}\`. It is run automatically after you finish; if it fails you will be asked to fix it (iteration ${c.iteration}/${c.maxIterations}). Run it yourself before finishing.`,
     ...describeEnvironment(c),
+    ...describeTooling(c.runtime),
   ].join('\n');
 }
 

@@ -7,6 +7,7 @@ import { previewUrl } from './routes.js';
 import { buildInitialPrompt, buildInstructionPrompt, buildRetryPrompt, describeEnvironment } from './prompt.js';
 import type { Sandbox } from './sandbox.js';
 import type { Project } from '@bivouac/shared';
+import { describeRuntime, detectRuntime, miseConfig, RUNTIME_FILES, runtimeKey, type RuntimeSpec } from './runtime.js';
 
 export type SandboxFactory = (task: Task) => Sandbox;
 /** Returns a credential for git / GitHub API calls on a project's repository (never given to a container). */
@@ -209,6 +210,8 @@ export class TaskManager {
       cpus: eff.limits?.cpus, memory: eff.limits?.memory, services: eff.services ?? {},
     });
     await startSandbox();
+    let runtime = await this.prepareRuntime(id, sb, eff, a);
+    if (a.stop) return this.finishStopped(id);
     let servicesKey = JSON.stringify(eff.services ?? {});
     if (a.stop) return this.finishStopped(id);
 
@@ -226,7 +229,7 @@ export class TaskManager {
     }
     let devKey = '';
     const writeDev = async () => {
-      const d = { command: eff.dev!.command, port: resolvePorts(eff)[0]?.port ?? 0, cwd: path.join(sb.ws, 'repo') };
+      const d = { command: eff.dev!.command, port: resolvePorts(eff)[0]?.port ?? 0, cwd: path.join(sb.ws, 'repo'), runtime: runtimeKey(runtime) };
       const key = JSON.stringify(d);
       if (key !== devKey) { await sb.writeFile('.bivouac/dev.json', key); devKey = key; }
     };
@@ -236,6 +239,7 @@ export class TaskManager {
     // 4. agent loop
     const successCmd = task.successCommand;
     let failure: { output: string; exitCode: number } | null = null;
+    let lastCheck: { output: string; fingerprint: string } | null = null;
     for (;;) {
       task = this.store.getTask(id)!;
       if (task.iteration >= task.maxIterations) return void this.store.setStatus(id, 'max_iterations');
@@ -245,13 +249,15 @@ export class TaskManager {
       this.store.patchTask(id, { iteration });
       // the agent may have edited bivouac.yml: new ports and services take effect now
       eff = await this.loadConfig(task, project, sb, true);
+      runtime = await this.prepareRuntime(id, sb, eff, a);
+      if (a.stop) return this.finishStopped(id);
       if (JSON.stringify(eff.services ?? {}) !== servicesKey) { servicesKey = JSON.stringify(eff.services ?? {}); await startSandbox(); }
       await writeDev();
       const env = describeEnvironment({ ports: this.store.getTask(id)!.ports, services: Object.entries(eff.services ?? {}).map(([name, v]) => ({ name, image: v.image })), configError: this.store.getTask(id)!.configError });
       const instructions = this.store.takeInstructions(id);
       let prompt: string;
       if (!task.sessionId) {
-        prompt = buildInitialPrompt({ ports: this.store.getTask(id)!.ports, services: Object.entries(eff.services ?? {}).map(([name, v]) => ({ name, image: v.image })), configError: this.store.getTask(id)!.configError, prompt: task.prompt, branch: task.branch, baseBranch: task.baseBranch, previewUrl: task.previewUrl, devCommand: dev.command, devLogPath: path.join(sb.ws, '.bivouac', 'dev.log'), successCommand: successCmd, iteration, maxIterations: task.maxIterations });
+        prompt = buildInitialPrompt({ ports: this.store.getTask(id)!.ports, services: Object.entries(eff.services ?? {}).map(([name, v]) => ({ name, image: v.image })), configError: this.store.getTask(id)!.configError, prompt: task.prompt, branch: task.branch, baseBranch: task.baseBranch, previewUrl: task.previewUrl, runtime: describeRuntime(runtime), devCommand: dev.command, devLogPath: path.join(sb.ws, '.bivouac', 'dev.log'), successCommand: successCmd, iteration, maxIterations: task.maxIterations });
         if (instructions.length) prompt += '\n\nAdditional instructions from the user:\n' + instructions.map((i) => `- ${i}`).join('\n');
       } else if (failure) {
         prompt = buildRetryPrompt({ checkOutput: failure.output, exitCode: failure.exitCode, successCommand: successCmd, instructions, iteration, maxIterations: task.maxIterations, env });
@@ -264,6 +270,13 @@ export class TaskManager {
       if (run.outcome === 'budget') return void this.store.setStatus(id, 'budget_exceeded');
       if (run.outcome === 'failed') throw new Error(run.error);
 
+      // the agent can stop by itself when it cannot go on (see the system prompt)
+      const blocked = await this.takeBlocked(sb);
+      if (blocked) {
+        this.store.addEvent(id, 'system', { subtype: 'blocked', reason: blocked });
+        return void this.store.setStatus(id, 'blocked', blocked);
+      }
+
       // 5. success check
       this.store.setStatus(id, 'checking');
       const s = this.sink(id, 'check');
@@ -273,10 +286,50 @@ export class TaskManager {
       this.store.addEvent(id, 'check', { command: successCmd, exitCode: code, output: truncateOutput(output, 20000) });
       if (code === 0) return void this.store.setStatus(id, 'succeeded');
       failure = { output, exitCode: code };
+      // same failure, same code as the previous attempt: another attempt would burn tokens for nothing
+      const fingerprint = await sb.fingerprint().catch(() => '');
+      if (lastCheck && fingerprint && lastCheck.fingerprint === fingerprint && lastCheck.output === output) {
+        const msg = `The success command failed twice in a row with the same output and no change to the code, so bivouac stopped the task instead of trying again. Last output:\n${truncateOutput(output, 1500)}`;
+        this.store.addEvent(id, 'system', { subtype: 'stuck', command: successCmd, exitCode: code });
+        return void this.store.setStatus(id, 'stuck', msg);
+      }
+      lastCheck = { output, fingerprint };
       task = this.store.getTask(id)!;
       if (task.iteration >= task.maxIterations) return void this.store.setStatus(id, 'max_iterations');
       if (task.usage.costUsd >= task.maxCostUsd || (task.maxTokens && tokensOf(task.usage) >= task.maxTokens)) return void this.store.setStatus(id, 'budget_exceeded');
     }
+  }
+
+  /**
+   * Finds the tool versions the repository wants (see runtime.ts), writes them to the mise configuration of the task and
+   * installs what is missing. Runs at the start of the task and of every agent session, so a `runtime:` the agent added
+   * to bivouac.yml takes effect on its next session. Throws when an install fails, with mise's output.
+   */
+  private async prepareRuntime(id: number, sb: Sandbox, eff: ProjectConfig, a: Active): Promise<RuntimeSpec> {
+    const files: Record<string, string | null> = {};
+    await Promise.all(RUNTIME_FILES.map(async (f) => { files[f] = await sb.readFile(`repo/${f}`).catch(() => null); }));
+    const spec = detectRuntime(files, eff.runtime);
+    const key = runtimeKey(spec);
+    if (key === (await sb.readFile('.bivouac/runtime.key').catch(() => null))) return spec;
+    await sb.writeFile('.bivouac/mise.toml', miseConfig(spec));
+    if (Object.keys(spec.tools).length) {
+      this.store.addEvent(id, 'system', { subtype: 'runtime', tools: spec.tools, sources: spec.sources });
+      const s = this.sink(id, 'runtime');
+      const code = await sb.exec(['bash', '-lc', 'mise install'], { cwd: sb.ws, onData: s.push, signal: a.abort.signal });
+      const out = s.end();
+      if (a.stop) return spec;
+      if (code !== 0) throw new Error(`Could not install the tool versions this project needs (${describeRuntime(spec)}). If the version exists, check its name; otherwise set another one under \`runtime:\` in bivouac.yml. Output: ${truncateOutput(out, 1200)}`);
+    }
+    await sb.writeFile('.bivouac/runtime.key', key);
+    return spec;
+  }
+
+  /** `.bivouac/blocked.md`, written by the agent when it cannot continue: its content is the reason. Consumed once. */
+  private async takeBlocked(sb: Sandbox): Promise<string | null> {
+    const text = await sb.readFile('.bivouac/blocked.md').catch(() => null);
+    if (text === null) return null;
+    await sb.writeFile('.bivouac/blocked.md', '').catch(() => {});
+    return text.trim() ? truncateOutput(text.trim(), 3000) : null;
   }
 
   private finishStopped(id: number) { this.store.setStatus(id, 'stopped'); }

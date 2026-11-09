@@ -51,6 +51,35 @@ describe('success loop', () => {
     expect(r.iteration).toBe(3);
   });
 
+  it('goes to blocked when the agent declares it cannot continue, and does not retry', async () => {
+    const env = makeEnv(); const remote = makeRemote();
+    const t = addTask(env, remote, { prompt: 'x FAKE_SCENARIO=blocked', success: OK, maxIterations: 5 });
+    const r = await run(env, t.id);
+    expect(r.status).toBe('blocked');
+    expect(r.iteration).toBe(1);
+    expect(r.error).toMatch(/Node >= 26/);
+    expect(env.store.listEvents(t.id).some((e) => e.data.subtype === 'blocked')).toBe(true);
+    // resuming with a message restarts it (and the declaration is consumed)
+    await env.mgr.resume(t.id, 'use node 26 from runtime');
+    await env.mgr.settled(t.id);
+    expect(env.store.getTask(t.id)!.iteration).toBe(2);
+  });
+
+  it('goes to stuck when two checks fail with the same output and no code change in between', async () => {
+    const env = makeEnv(); const remote = makeRemote();
+    const t = addTask(env, remote, { prompt: 'x FAKE_SCENARIO=stuck', success: OK, maxIterations: 8 });
+    const r = await run(env, t.id);
+    expect(r.status).toBe('stuck');
+    expect(r.iteration).toBe(2);
+    expect(r.error).toMatch(/twice in a row/);
+  });
+
+  it('keeps retrying when the output is the same but the code changed', async () => {
+    const env = makeEnv(); const remote = makeRemote();
+    const t = addTask(env, remote, { prompt: 'x FAKE_SCENARIO=always-fail', success: OK, maxIterations: 3 });
+    expect((await run(env, t.id)).status).toBe('max_iterations');
+  });
+
   it('stops with budget_exceeded (cost, enforced via --max-budget-usd)', async () => {
     const env = makeEnv(); const remote = makeRemote();
     const t = addTask(env, remote, { prompt: 'x FAKE_SCENARIO=always-fail FAKE_COST=2', success: OK, maxCost: 3, maxIterations: 10 });

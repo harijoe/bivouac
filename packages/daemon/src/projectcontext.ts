@@ -208,7 +208,7 @@ export class ProjectContext {
     if (full && msgs.length > 1) lines.push('- earlier agent messages:', ...msgs.slice(-6, -1).map((m) => `  - ${redactSecrets(m.slice(0, 500)).replace(/\n/g, ' ')}`));
     let problem: string | null = null;
     if (t.status === 'budget_exceeded') problem = `task "${t.name}" stopped on its budget (${cost} of ${t.maxCostUsd})`;
-    else if (last && last.data.exitCode !== 0 && ['failed', 'max_iterations', 'stopped'].includes(t.status)) problem = `task "${t.name}" ended (${t.status}) with its verification failing: \`${last.data.command}\` exit ${last.data.exitCode}`;
+    else if (last && last.data.exitCode !== 0 && ['failed', 'max_iterations', 'stopped', 'stuck'].includes(t.status)) problem = `task "${t.name}" ended (${t.status}) with its verification failing: \`${last.data.command}\` exit ${last.data.exitCode}`;
     else if (t.status === 'failed') problem = `task "${t.name}" failed: ${redactSecrets(t.error ?? 'unknown error').slice(0, 200)}`;
     return { text: lines.join('\n'), problem };
   }

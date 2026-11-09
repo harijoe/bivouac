@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/harijoe/bivouac/main/install.sh | s
 There are no questions. The installer installs Docker if needed, starts bivouac, gets a certificate for `https://<ip-with-dashes>.sslip.io`, and prints a **one-time setup link** with a QR code:
 
 ```
-  bivouac 0.3.0 is running. Open this link to finish the setup (it works once):
+  bivouac 0.3.1 is running. Open this link to finish the setup (it works once):
 
     https://203-0-113-7.sslip.io/setup?code=K7QM-4TXD
 ```
@@ -94,6 +94,7 @@ Optional file at the root of a repository (the dashboard's *Default limits* and 
 
 ```yaml
 setup: pnpm install            # runs once per task workspace
+runtime: { node: "26", python: "3.12" }   # optional: force tool versions (otherwise detected, see below)
 dev:
   command: pnpm dev --host 0.0.0.0   # one command; it may start several servers
 ports:                         # named ports; the first one is the main preview
@@ -111,6 +112,16 @@ budget: { max_iterations: 10, max_cost_usd: 20 }
 ```
 
 See [`examples/vite-app`](examples/vite-app) (one port) and [`examples/multi-app`](examples/multi-app) (front + API + Postgres). The old `dev: { command, port }` form still works.
+
+### Tool versions (Node, pnpm, Python, Go, Rust…)
+
+The task image ships Node 22, but tasks use the versions your repository asks for. When a task starts, bivouac reads these files at the root of the repository — `mise.toml`, `.tool-versions`, `.nvmrc`, `.node-version`, `package.json` (`engines.node`, `packageManager`), `.python-version`, `go.mod`, `rust-toolchain(.toml)` — and installs the versions with [mise](https://mise.jdx.dev), without root, into a cache volume shared by the tasks of the project (only the first task downloads). They are on the `PATH` of `setup`, `dev`, `success` and of the agent. For `engines.node` (a range) the lowest version of the range is installed. When several files disagree the strongest wins: `package.json` < `.nvmrc` / `.node-version` < `.tool-versions` < `mise.toml` < `runtime:` in `bivouac.yml`. `runtime:` always wins; quote versions such as `"3.10"` so YAML keeps the zero.
+
+There are no system packages (apt) and no custom image: the `image:` key of `bivouac.yml` is no longer accepted and gives a clear error. The agent may install a tool without root for a try, but must make it reproducible in `runtime:` or `setup:`; it never edits the repository to get around a version requirement. If it needs something only root can provide, it declares itself *blocked* (see below).
+
+### When the agent cannot go on
+
+The agent can stop on its own by writing why, and what it expects from you, to `/workspace/.bivouac/blocked.md`: the task goes to **blocked**, nothing is retried, and the reason is shown in the dashboard and in `get_task` (`error`). Answer with a message (or `resume_task` with an instruction). Independently, if two consecutive success checks fail with the same output and no change to the code in between, the task stops as **stuck** with that output.
 
 ### Several ports
 

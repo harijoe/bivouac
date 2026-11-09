@@ -1,7 +1,8 @@
 import type { Project, Task, TaskEvent, Usage } from '@bivouac/shared';
 
 export type ProjectWithTotals = Project & { totals: Usage & { tasks: number } };
-export type TaskView = Task & { dashboardUrl: string; pendingInstructions?: number; active?: boolean; shares?: Share[] };
+export type CostKind = 'estimated_api_equivalent' | 'cost';
+export type TaskView = Task & { costKind?: CostKind; dashboardUrl: string; pendingInstructions?: number; active?: boolean; shares?: Share[] };
 export interface Share { id: number; createdAt: number; expiresAt: number | null; revoked: boolean; active: boolean; url: string | null; urls?: { name: string; url: string }[] }
 export interface Session {
   user: { githubId: number; login: string; name: string | null; avatarUrl: string | null; role: 'admin' | 'user' } | null;
@@ -21,6 +22,8 @@ export async function api<T = any>(method: string, url: string, body?: unknown):
 }
 
 export const fmtUsd = (n: number) => `$${n.toFixed(n < 10 ? 2 : 1)}`;
+/** With a Claude subscription the figure is the CLI's API-equivalent estimate, not money spent. */
+export const costLabel = (k?: CostKind) => (k === 'cost' ? 'cost' : 'API-equivalent estimate');
 export const fmtTok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
 export const totalTokens = (u: Usage) => u.inputTokens + u.outputTokens + u.cacheCreationTokens;
 export function ago(iso: string | null | undefined, now = Date.now()) {

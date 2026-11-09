@@ -2,6 +2,7 @@ import Dockerode from 'dockerode';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { chownSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import type { ServiceConfig } from '@bivouac/shared';
@@ -33,6 +34,8 @@ export interface Sandbox {
   push(o: { branch: string; token: string | null }): Promise<void>;
   /** Commits that exist only locally. */
   unpushed(): Promise<number>;
+  /** Hash of the repository content (committed or not, ignored files excluded): changes whenever the code changes. */
+  fingerprint(): Promise<string>;
   /** Files below the workspace (`repo/…`, `.bivouac/…`). Returns null when absent. */
   readFile(rel: string): Promise<string | null>;
   writeFile(rel: string, content: string): Promise<void>;
@@ -89,6 +92,19 @@ abstract class HostWorkspace {
     const r = await git(['rev-list', '--count', 'HEAD', '--not', '--remotes'], { cwd: repo });
     return r.code === 0 ? Number(r.stdout.trim()) : 0;
   }
+  async fingerprint() {
+    const repo = this.safe('repo');
+    if (!existsSync(repo)) return '';
+    // a throwaway index, so the agent's own staging area is never touched
+    const idx = path.join(tmpdir(), `bv-fp-${randomUUID()}`);
+    const env = { GIT_INDEX_FILE: idx };
+    try {
+      if ((await git(['read-tree', 'HEAD'], { cwd: repo, env })).code !== 0) return '';
+      await git(['add', '-A', '--', '.', ':!.bivouac'], { cwd: repo, env });
+      const r = await git(['write-tree'], { cwd: repo, env });
+      return r.code === 0 ? r.stdout.trim() : '';
+    } finally { rmSync(idx, { force: true }); }
+  }
   protected removeWorkspace(taskDir: string) {
     try { rmSync(taskDir, { recursive: true, force: true }); } catch (e) {
       // only possible when the daemon is not root (dev/CI): files owned by the container user
@@ -140,13 +156,16 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
       await this.docker.createNetwork({ Name: this.name, Labels: { 'bivouac.managed': 'true' }, Options: { 'com.docker.network.bridge.name': bridge } });
     }
     await this.syncServices(spec);
+    // tool versions (mise) are installed into a cache shared by the tasks of one project: only the first one downloads
+    const cache = `${this.opts.namePrefix}-mise-${this.opts.project}`;
+    await this.docker.createVolume({ Name: cache, Labels: { 'bivouac.managed': 'true', 'bivouac.cache': 'mise', 'bivouac.project': this.opts.project } }).catch(() => {});
     try { await this.container!.inspect().then(async (i) => { if (!i.State.Running) await this.container!.start(); }); }
     catch {
       const c = await this.docker.createContainer({
         name: this.name, Image: this.opts.image, Labels: labels,
         Env: Object.entries(spec.env).map(([k, v]) => `${k}=${v}`),
         HostConfig: {
-          Binds: [`${this.hostWs}:/workspace`],
+          Binds: [`${this.hostWs}:/workspace`, `${cache}:/mise`],
           NetworkMode: this.name,
           NanoCpus: spec.cpus ? Math.round(spec.cpus * 1e9) : undefined,
           Memory: spec.memory ? parseMemory(spec.memory) : undefined,

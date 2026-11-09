@@ -1,9 +1,9 @@
 export const TASK_STATUSES = [
   'queued', 'starting', 'running', 'checking', 'succeeded', 'failed',
-  'budget_exceeded', 'max_iterations', 'stopped',
+  'budget_exceeded', 'max_iterations', 'stopped', 'blocked', 'stuck',
 ] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
-export const TERMINAL_STATUSES: TaskStatus[] = ['succeeded', 'failed', 'budget_exceeded', 'max_iterations', 'stopped'];
+export const TERMINAL_STATUSES: TaskStatus[] = ['succeeded', 'failed', 'budget_exceeded', 'max_iterations', 'stopped', 'blocked', 'stuck'];
 export const isTerminal = (s: TaskStatus) => TERMINAL_STATUSES.includes(s);
 
 export interface Usage {

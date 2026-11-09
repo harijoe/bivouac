@@ -84,7 +84,7 @@ function Shares({ task, shares, reload }: { task: TaskView; shares: Share[]; rel
       <p className="muted">Anyone with a link can view this preview, and only this preview, until it expires or you stop it.</p>
       <div className="copy-row">
         <select value={dur} onChange={(e) => setDur(e.target.value)} aria-label="Link duration">{DURATIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-        <Button variant="primary" busy={a.busy} onClick={() => a.run(async () => { await api('POST', `/api/tasks/${task.id}/shares`, { duration: dur }); reload(); })}>Create a link</Button>
+        <Button variant="primary" busy={a.busy} busyLabel="Creating the link…" onClick={() => a.run(async () => { await api('POST', `/api/tasks/${task.id}/shares`, { duration: dur }); reload(); })}>Create a link</Button>
       </div>
       <ErrorNote>{a.error}</ErrorNote>
       {active.length === 0 && <p className="muted">No active links.</p>}
@@ -93,7 +93,7 @@ function Shares({ task, shares, reload }: { task: TaskView; shares: Share[]; rel
           {(s.urls?.length ?? 0) > 1
             ? s.urls!.map((u) => <CopyField key={u.name} value={u.url} label={`${u.name}${s.expiresAt ? ` · expires ${new Date(s.expiresAt * 1000).toLocaleString()}` : ' · no expiry'}`} />)
             : <CopyField value={s.url ?? ''} label={s.expiresAt ? `Expires ${new Date(s.expiresAt * 1000).toLocaleString()}` : 'No expiry'} />}
-          <Button variant="ghost" onClick={() => a.run(async () => { await api('DELETE', `/api/tasks/${task.id}/shares/${s.id}`); reload(); })}>Revoke</Button>
+          <Button variant="ghost" busyLabel="Revoking…" onClick={() => a.run(async () => { await api('DELETE', `/api/tasks/${task.id}/shares/${s.id}`); reload(); })}>Revoke</Button>
         </div>
       ))}
     </div>
@@ -146,18 +146,25 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
     <>
       <p className="crumb"><Link to="/">← All tasks</Link></p>
       <header className="task-head">
-        <div><h1>{task.name}</h1><p className="muted">{task.projectName} · attempt {Math.max(1, task.iteration)} of {task.maxIterations} · {fmtUsd(task.usage.costUsd)} of {fmtUsd(task.maxCostUsd)}{task.startedAt ? ` · ${duration(task.startedAt, task.finishedAt, now)}` : ''}</p></div>
+        <div><h1>{task.name}</h1><p className="muted">{task.projectName} · attempt {Math.max(1, task.iteration)} of {task.maxIterations} · {fmtUsd(task.usage.costUsd)} {task.costKind === 'cost' ? 'cost' : 'estimated API equivalent'} of {fmtUsd(task.maxCostUsd)} limit{task.startedAt ? ` · ${duration(task.startedAt, task.finishedAt, now)}` : ''}</p></div>
         <StatusPill s={task.status} />
       </header>
 
       <div className="actions">
-        {task.devPort && <Button variant="primary" onClick={() => openPreview()} busy={act.busy}>Open preview ↗</Button>}
-        {task.ports.filter((p) => !p.primary).map((p) => <Button key={p.name} onClick={() => openPreview(p.name)} busy={act.busy}>Open {p.name} ↗</Button>)}
-        {active ? <Button variant="danger" onClick={() => post('stop')}>Stop</Button> : task.status !== 'succeeded' && <Button onClick={() => post('resume')}>Resume</Button>}
+        {task.devPort && <Button variant="primary" onClick={() => openPreview()} busyLabel="Opening…">Open preview ↗</Button>}
+        {task.ports.filter((p) => !p.primary).map((p) => <Button key={p.name} onClick={() => openPreview(p.name)} busyLabel="Opening…">Open {p.name} ↗</Button>)}
+        {active ? <Button variant="danger" busyLabel="Stopping…" onClick={() => post('stop')}>Stop</Button> : task.status !== 'succeeded' && <Button busyLabel="Resuming…" onClick={() => post('resume')}>Resume</Button>}
       </div>
       <ErrorNote>{act.error}</ErrorNote>
-      {hint && !task.error && <p className="note">{hint}</p>}
-      {task.error && (
+      {hint && (!task.error || task.status === 'blocked' || task.status === 'stuck') && <p className="note">{hint}</p>}
+      {task.error && (task.status === 'blocked' || task.status === 'stuck') && (
+        <div className="note warn" role="status">
+          <b>{task.status === 'blocked' ? 'The agent is waiting for you:' : 'The agent was stopped because it was stuck:'}</b>
+          <pre className="reason">{task.error}</pre>
+          <p className="muted">Answer in the message box below{task.status === 'blocked' ? '' : ' with a new direction'}, then press Resume. Nothing is retried automatically.</p>
+        </div>
+      )}
+      {task.error && task.status !== 'blocked' && task.status !== 'stuck' && (
         <p className="note error" role="alert">
           {claudeProblem ? <>Your Claude connection has a problem: {task.error} <Link to="/settings#claude">Reconnect Claude</Link></> : task.error}
         </p>
@@ -171,7 +178,7 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
         <div ref={feedEnd} />
         <form className="copy-row" onSubmit={(e) => { e.preventDefault(); const text = msg.trim(); if (!text) return; setMsg(''); void act.run(async () => { await api('POST', `/api/tasks/${task.id}/instruct`, { text }); await reload(); }); }}>
           <input placeholder={active ? 'Tell the agent something…' : 'Tell the agent something (it will resume)…'} value={msg} onChange={(e) => setMsg(e.target.value)} aria-label="Instruction" />
-          <Button disabled={!msg.trim()}>Send</Button>
+          <Button disabled={!msg.trim()} busyLabel="Sending…" busy={act.busy}>Send</Button>
         </form>
         {(task.pendingInstructions ?? 0) > 0 && <p className="muted">{task.pendingInstructions} message(s) waiting for the next attempt.</p>}
       </section>
@@ -192,22 +199,22 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
           {task.services.length > 0 && <><dt>Services</dt><dd>{task.services.map((x) => <div key={x.name}><b>{x.name}</b> <span className="muted">{x.image}</span></div>)}</dd></>}
         </dl>
         <div className="actions">
-          <Button onClick={() => post('push')}>{task.pushed ? 'Push again' : 'Push branch to GitHub'}</Button>
-          <Button onClick={() => act.run(async () => { await api('POST', `/api/tasks/${task.id}/pr`); await reload(); })}>Open a pull request</Button>
+          <Button busyLabel="Pushing the branch…" onClick={() => post('push')}>{task.pushed ? 'Push again' : 'Push branch to GitHub'}</Button>
+          <Button busyLabel="Opening the pull request…" onClick={() => act.run(async () => { await api('POST', `/api/tasks/${task.id}/pr`); await reload(); })}>Open a pull request</Button>
         </div>
       </Details>
       <Details title="Dev server logs">
-        <Button variant="secondary" onClick={() => act.run(async () => setDevLog((await api('GET', `/api/tasks/${task.id}/devlogs?lines=300`)).text || 'No output yet.'))}>{devLog === null ? 'Show logs' : 'Refresh'}</Button>
+        <Button variant="secondary" busyLabel="Loading the logs…" onClick={() => act.run(async () => setDevLog((await api('GET', `/api/tasks/${task.id}/devlogs?lines=300`)).text || 'No output yet.'))}>{devLog === null ? 'Show logs' : 'Refresh'}</Button>
         {devLog !== null && <pre>{devLog}</pre>}
       </Details>
       <Details title="Manage">
         <form className="stack" onSubmit={(e) => { e.preventDefault(); void act.run(async () => { const t = await api<TaskView>('POST', `/api/tasks/${task.id}/rename`, { name: newName }); navigate(`/projects/${t.projectName}/${t.name}`, true); }); }}>
           <label>Rename<input value={newName} placeholder={task.name} onChange={(e) => setNewName(e.target.value.toLowerCase())} pattern="[a-z0-9]([a-z0-9\-]{0,38}[a-z0-9])?" /></label>
           <p className="muted">The preview address changes immediately and existing share links stop working. The git branch keeps its name.</p>
-          <Button disabled={!newName || newName === task.name}>Rename</Button>
+          <Button disabled={!newName || newName === task.name} busy={act.busy} busyLabel="Renaming…">Rename</Button>
         </form>
         {(
-          <Button variant="danger" onClick={() => act.run(async () => {
+          <Button variant="danger" busyLabel="Deleting…" onClick={() => act.run(async () => {
             try { await api('DELETE', `/api/tasks/${task.id}`); } catch (x) {
               if (x instanceof ApiError && x.body.code === 'UNPUSHED') { if (!confirm(`${x.message}. Delete anyway and lose this work?`)) return; await api('DELETE', `/api/tasks/${task.id}?force=1`); } else throw x;
             }

@@ -33,6 +33,7 @@ export class RemoteSandbox implements Sandbox {
   async start(spec: SandboxSpec) { await this.c.call('POST', this.p('start'), { env: spec.env, cpus: spec.cpus, memory: spec.memory, services: spec.services }); }
   async push(o: { branch: string; token: string | null }) { await this.c.call('POST', this.p('push'), o); }
   async unpushed() { return (await this.c.call('GET', this.p('unpushed'))).count as number; }
+  async fingerprint() { return (await this.c.call('GET', this.p('fingerprint'))).hash as string; }
   async readFile(rel: string) { return (await this.c.call('GET', this.p('file', `&path=${encodeURIComponent(rel)}`))).content as string | null; }
   async writeFile(rel: string, content: string) { await this.c.call('PUT', this.p('file'), { path: rel, content }); }
   async isRunning() { return (await this.c.call('GET', this.p('running'))).running as boolean; }

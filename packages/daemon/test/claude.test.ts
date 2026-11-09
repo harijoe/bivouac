@@ -64,7 +64,9 @@ describe('claude setup-token parsing (real captured output)', () => {
       draw += tok[i];
     }
     const raw = `${oldText}\r${draw}\r\n`;
+    // eslint-disable-next-line no-control-regex
     expect(raw).toMatch(/\x1b\[\d+C/);
+    // eslint-disable-next-line no-control-regex
     const naive = raw.replace(/\x1b\[\d*C/g, ' ').split('\r')[1];
     expect(naive).not.toContain(tok); // what the old regex-only parsing saw
     expect(await parseToken(raw)).toBe(tok);

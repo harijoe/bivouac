@@ -15,7 +15,7 @@ export function claudeSummary(s: ClaudeStatus | null): { text: string; ok: boole
 
 export function ClaudeConnect({ status, onChange, primaryLabel }: { status: ClaudeStatus | null; onChange: () => void; primaryLabel?: string }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [phase, setPhase] = useState<'starting' | 'waiting_code' | 'done' | 'error'>('starting');
+  const [phase, setPhase] = useState<'starting' | 'waiting_code' | 'verifying' | 'done' | 'error'>('starting');
   const [url, setUrl] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [code, setCode] = useState('');
@@ -45,13 +45,13 @@ export function ClaudeConnect({ status, onChange, primaryLabel }: { status: Clau
   if (!sessionId && phase !== 'error') {
     return (
       <div className="stack">
-        <Button variant={status?.connected && !status.expired ? 'secondary' : 'primary'} onClick={start} busy={a.busy}>{label}</Button>
+        <Button variant={status?.connected && !status.expired ? 'secondary' : 'primary'} onClick={start} busy={a.busy} busyLabel="Opening the sign-in…">{label}</Button>
         <ErrorNote>{a.error}</ErrorNote>
         <Details title="Use an API key instead">
           <form className="stack" onSubmit={(e) => { e.preventDefault(); void a.run(async () => { await api('PUT', '/api/claude/apikey', { key }); setKey(''); onChange(); }); }}>
             <p className="muted">Pay-as-you-go billing through the Anthropic API. Paste a key that starts with <code>sk-ant-</code>.</p>
             <input type="password" autoComplete="off" placeholder="sk-ant-…" value={key} onChange={(e) => setKey(e.target.value)} />
-            <Button disabled={!key} busy={a.busy}>Save key</Button>
+            <Button disabled={!key} busy={a.busy} busyLabel="Checking the key…">Save key</Button>
           </form>
         </Details>
       </div>
@@ -60,25 +60,26 @@ export function ClaudeConnect({ status, onChange, primaryLabel }: { status: Clau
   return (
     <div className="stack">
       {phase === 'starting' && <p className="muted">Preparing the sign-in…</p>}
-      {phase === 'waiting_code' && url && (
+      {(phase === 'waiting_code' || phase === 'verifying') && url && (
         <>
           <ol className="steps">
             <li><b>Open the sign-in page</b> and approve access with your Claude account.<br /><a className="btn primary inline" href={url} target="_blank" rel="noreferrer">Open claude.ai</a></li>
             <li><b>Copy the code</b> shown at the end, and paste it here.</li>
           </ol>
-          <form className="copy-row" onSubmit={(e) => { e.preventDefault(); void a.run(async () => { await api('POST', `/api/claude/login/${sessionId}/code`, { code }); setCode(''); }); }}>
-            <input autoFocus autoComplete="off" placeholder="Paste the code here" value={code} onChange={(e) => setCode(e.target.value)} />
-            <Button variant="primary" disabled={!code} busy={a.busy}>Continue</Button>
+          <form className="copy-row" onSubmit={(e) => { e.preventDefault(); void a.run(async () => { await api('POST', `/api/claude/login/${sessionId}/code`, { code: code.trim() }); setPhase('verifying'); }); }}>
+            <input autoFocus autoComplete="off" placeholder="Paste the code here" aria-label="Sign-in code" value={code} readOnly={phase === 'verifying'} onChange={(e) => setCode(e.target.value)} />
+            <Button variant="primary" disabled={!code.trim() && phase !== 'verifying'} busy={a.busy || phase === 'verifying'} busyLabel="Verifying the code…">Continue</Button>
           </form>
+          {phase === 'verifying' && <p className="muted" role="status">Claude is checking the code. This takes a few seconds.</p>}
           <ErrorNote>{a.error}</ErrorNote>
         </>
       )}
       {phase === 'error' && (
         <>
-          <ErrorNote>{message || 'The sign-in did not finish.'} Try again.</ErrorNote>
+          <ErrorNote>{message || 'The sign-in did not finish.'} Click “Start over” to get a new sign-in page and a new code.</ErrorNote>
         </>
       )}
-      {phase === 'error' ? <Button variant="primary" onClick={() => { cancel(); void start(); }}>Try again</Button> : <Button variant="ghost" onClick={cancel}>Cancel</Button>}
+      {phase === 'error' ? <Button variant="primary" busy={a.busy} busyLabel="Opening the sign-in…" onClick={() => { cancel(); void start(); }}>Start over</Button> : <Button variant="ghost" onClick={cancel}>Cancel</Button>}
     </div>
   );
 }

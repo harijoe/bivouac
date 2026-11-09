@@ -60,6 +60,7 @@ const dash = async (method: string, p: string, body?: unknown) => {
 async function removeAll() {
   for (const c of Object.values(C)) await docker.getContainer(c).remove({ force: true }).catch(() => {});
   for (const c of await docker.listContainers({ all: true, filters: { name: ['bivouac-dev-task-'] } })) await docker.getContainer(c.Id).remove({ force: true }).catch(() => {});
+  for (const v of (await docker.listVolumes({ filters: { label: ['bivouac.cache=mise'] } })).Volumes ?? []) if (v.Name.startsWith(`${PFX}-mise-`)) await docker.getVolume(v.Name).remove({ force: true }).catch(() => {});
   for (const n of Object.values(NET)) await docker.getNetwork(n).remove().catch(() => {});
   for (const n of await docker.listNetworks({ filters: { name: ['bivouac-dev-task-'] } })) await docker.getNetwork(n.Id).remove().catch(() => {});
 }
@@ -97,6 +98,12 @@ beforeAll(async () => {
   mkRepo('echo', (d) => {
     writeFileSync(path.join(d, 'echo.mjs'), "import http from 'node:http'; http.createServer((q, r) => r.end(JSON.stringify({ cookie: q.headers.cookie ?? null, host: q.headers.host }))).listen(3000, '0.0.0.0');\n");
     writeFileSync(path.join(d, 'bivouac.yml'), 'dev:\n  command: node echo.mjs\n  port: 3000\nsuccess: "true"\n');
+  });
+
+  // a project that wants other tool versions than the image (Node 22): Node 26 and pnpm 11, declared the way real repos do
+  mkRepo('oldnode', (d) => {
+    writeFileSync(path.join(d, 'package.json'), JSON.stringify({ name: 'oldnode', engines: { node: '>=26' }, packageManager: 'pnpm@11.5.0' }));
+    writeFileSync(path.join(d, 'bivouac.yml'), `dev:\n  command: node -e "require('http').createServer((q,r)=>r.end('node '+process.version)).listen(3000,'0.0.0.0')"\n  port: 3000\nsuccess: "node -v | grep -q '^v26' && pnpm -v | grep -q '^11'"\n`);
   });
 
   dataDir = mkdtempSync(path.join(tmpdir(), 'bv-it-data-'));
@@ -268,6 +275,36 @@ describe('docker integration (real topology)', () => {
     for (const id of [a.id, b.id]) expect((await dash('DELETE', `/api/tasks/${id}?force=1`)).status).toBe(200);
     expect(await docker.listContainers({ all: true, filters: { name: ['bivouac-dev-task-'] } })).toHaveLength(0);
     expect(await docker.listNetworks({ filters: { name: ['bivouac-dev-task-'] } })).toHaveLength(0);
+  });
+
+  it('installs the tool versions the repository asks for, and a second task reuses the project cache', async () => {
+    expect((await dash('POST', '/api/projects', { repoUrl: path.join(reposDir, 'oldnode'), name: 'oldnode' })).status).toBe(201);
+    const { c } = await mcpClient();
+    const done = async (name: string) => waitFor(async () => {
+      const t = json(await c.callTool({ name: 'get_task', arguments: { project: 'oldnode', task: name } }));
+      return ['succeeded', 'failed', 'budget_exceeded', 'max_iterations', 'blocked', 'stuck'].includes(t.status) ? t : false;
+    }, 300000, 2000);
+    const a = json(await c.callTool({ name: 'create_task', arguments: { project: 'oldnode', name: 'first', prompt: 'x' } }));
+    const first = await done('first');
+    expect(first.status, first.error).toBe('succeeded'); // the success command ran under Node 26 and pnpm 11, the image has Node 22
+    const ev = (await dash('GET', `/api/tasks/${a.id}/events`)).json as any[];
+    expect(ev.some((e) => e.data.subtype === 'runtime' && e.data.tools.node === '26' && e.data.tools.pnpm === '11.5.0')).toBe(true);
+    expect(ev.filter((e) => e.data.subtype === 'output' && e.data.label === 'runtime').map((e) => e.data.text).join('')).toMatch(/node@26/); // downloaded
+    // the dev server (started by the supervisor through a login shell) also runs under Node 26
+    const dev = await waitFor(async () => { const t = await dash('GET', `/api/tasks/${a.id}/devlogs`); return /starting:/.test(t.json.text) ? t.json.text : false; }, 60000, 1000);
+    expect(dev).toBeTruthy();
+    expect(sh(['exec', `${PFX}-task-${a.id}`, 'bash', '-lc', 'node -v'])).toMatch(/^v26/);
+    expect(sh(['exec', `${PFX}-task-${a.id}`, 'node', '-v'])).toMatch(/^v26/);
+    expect((await docker.listVolumes({ filters: { name: [`${PFX}-mise-oldnode`] } })).Volumes).toHaveLength(1);
+
+    const b = json(await c.callTool({ name: 'create_task', arguments: { project: 'oldnode', name: 'second', prompt: 'x' } }));
+    const second = await done('second');
+    expect(second.status, second.error).toBe('succeeded');
+    const ev2 = (await dash('GET', `/api/tasks/${b.id}/events`)).json as any[];
+    expect(ev2.some((e) => e.data.subtype === 'runtime')).toBe(true);
+    expect(ev2.filter((e) => e.data.subtype === 'output' && e.data.label === 'runtime').map((e) => e.data.text).join('')).toMatch(/already installed/); // nothing downloaded again
+    for (const id of [a.id, b.id]) await dash('DELETE', `/api/tasks/${id}?force=1`);
+    await c.close().catch(() => {});
   });
 
   it('the preview cookie never reaches the app, other cookies do', async () => {
