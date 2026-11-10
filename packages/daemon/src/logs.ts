@@ -47,6 +47,13 @@ export function parseServiceLines(text: string): LogLine[] {
   return out;
 }
 
+/** What bivouac itself noticed about a service (killed for memory, restarted…), as lines of that service's log. */
+function incidentLines(events: TaskEvent[], service: string): LogLine[] {
+  return events.filter((e) => e.kind === 'system' && e.data?.subtype === 'service_incident' && e.data.service === service)
+    .map((e, i) => ({ id: Date.parse(e.createdAt) * 1000 + 999 - (i % 100), ts: e.createdAt, text: `[bivouac] ${String(e.data.message ?? '')}` }));
+}
+const byId = (a: LogLine, b: LogLine) => a.id - b.id;
+
 export class TaskLogs {
   constructor(private store: Store, private sandboxFor: (t: Task) => Sandbox) {}
 
@@ -89,7 +96,7 @@ export class TaskLogs {
       return { lines, hasMore: start > 0 && lines.length > 0, cursor: size };
     }
     if (key.startsWith('svc:')) {
-      const all = parseServiceLines(await this.sandboxFor(t).serviceLogs(key.slice(4), limit * 4 + (o.before ? 5000 : 0)).catch(() => ''));
+      const all = [...parseServiceLines(await this.sandboxFor(t).serviceLogs(key.slice(4), limit * 4 + (o.before ? 5000 : 0)).catch(() => '')), ...incidentLines(this.store.listEvents(t.id, 0, 100000), key.slice(4))].sort(byId);
       const older = o.before ? all.filter((l) => l.id < o.before!) : all;
       const lines = older.slice(-limit);
       return { lines, hasMore: older.length > lines.length || all.length >= limit * 4, cursor: all.length ? all[all.length - 1].id : 0 };
@@ -107,7 +114,7 @@ export class TaskLogs {
       if (w.size < cursor) return { lines: [], cursor: w.size }; // the file was truncated
       return { lines: parseDevLines(w.text, w.start), cursor: w.end };
     }
-    const lines = key.startsWith('svc:') ? parseServiceLines(await this.sandboxFor(t).serviceLogs(key.slice(4), 300).catch(() => '')).filter((l) => l.id > cursor) : this.eventSourceLines(t, key).filter((l) => l.id > cursor);
+    const lines = key.startsWith('svc:') ? [...parseServiceLines(await this.sandboxFor(t).serviceLogs(key.slice(4), 300).catch(() => '')), ...incidentLines(this.store.listEvents(t.id, 0, 100000), key.slice(4))].sort(byId).filter((l) => l.id > cursor) : this.eventSourceLines(t, key).filter((l) => l.id > cursor);
     return { lines, cursor: lines.length ? lines[lines.length - 1].id : cursor };
   }
 }

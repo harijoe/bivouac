@@ -144,6 +144,8 @@ export function createExecutorApp(cfg: DaemonConfig, docker: Dockerode, login: L
     return c.json(await sb(c).tail(c.req.query('path') ?? '', { before: n('before'), after: n('after'), bytes: n('bytes') }));
   }));
   app.get('/sandboxes/:id/service-logs', wrap(async (c) => c.json({ text: await sb(c).serviceLogs(c.req.query('name') ?? '', Number(c.req.query('tail') ?? 500)) })));
+  app.get('/sandboxes/:id/service-states', wrap(async (c) => c.json({ states: await sb(c).serviceStates() })));
+  app.post('/sandboxes/:id/service-restart', wrap(async (c) => { await sb(c).restartService(c.req.query('name') ?? ''); return c.json({ ok: true }); }));
   app.get('/sandboxes/:id/fingerprint', wrap(async (c) => c.json({ hash: await sb(c).fingerprint() })));
   app.get('/sandboxes/:id/file', wrap(async (c) => c.json({ content: await sb(c).readFile(c.req.query('path') ?? '') })));
   app.put('/sandboxes/:id/file', wrap(async (c) => { const b = await c.req.json(); await sb(c).writeFile(String(b.path), String(b.content)); return c.json({ ok: true }); }));

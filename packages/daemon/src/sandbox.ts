@@ -5,7 +5,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
-import type { ServiceConfig } from '@bivouac/shared';
+import { DEFAULT_SERVICE_CPUS, DEFAULT_SERVICE_MEMORY, type ServiceConfig } from '@bivouac/shared';
 import { chownTree, git, gitOk } from './git.js';
 
 export interface SandboxSpec {
@@ -16,6 +16,19 @@ export interface SandboxSpec {
   memory?: string;
   /** Sidecars to run next to the task. Services missing from this map are removed. */
   services?: Record<string, ServiceConfig>;
+}
+/** What Docker knows about one sidecar right now. */
+export interface ServiceState {
+  name: string;
+  running: boolean;
+  /** The kernel killed it for exceeding its memory limit (only meaningful while it is stopped). */
+  oomKilled: boolean;
+  exitCode: number | null;
+  restartCount: number;
+  startedAt: string;
+  finishedAt: string;
+  /** Memory limit in bytes (0 = none). */
+  memoryLimit: number;
 }
 export interface TailWindow { text: string; start: number; end: number; size: number }
 export interface PrepareOpts { repoUrl: string; token: string | null; branch: string; base: string }
@@ -45,6 +58,10 @@ export interface Sandbox {
   tail(rel: string, o?: { before?: number; after?: number; bytes?: number }): Promise<TailWindow>;
   /** Recent output of a sidecar service (stdout and stderr, each line prefixed with its timestamp by Docker). */
   serviceLogs(name: string, tail: number): Promise<string>;
+  /** State of each sidecar (running, killed for memory…). Empty when the task has none. */
+  serviceStates(): Promise<ServiceState[]>;
+  /** Starts a stopped sidecar again (its data volume is kept). */
+  restartService(name: string): Promise<void>;
   /** Files below the workspace (`repo/…`, `.bivouac/…`). Returns null when absent. */
   readFile(rel: string): Promise<string | null>;
   writeFile(rel: string, content: string): Promise<void>;
@@ -249,28 +266,56 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
     for (const [n, sc] of Object.entries(want)) {
       const c = this.docker.getContainer(this.svcName(n));
       const info = await c.inspect().catch(() => null);
+      const memory = parseMemory(sc.memory ?? DEFAULT_SERVICE_MEMORY), nanoCpus = Math.round((sc.cpus ?? DEFAULT_SERVICE_CPUS) * 1e9);
       if (info && info.Config.Image !== sc.image) { await c.remove({ force: true }).catch(() => {}); }
-      else if (info) { if (!info.State.Running) await c.start(); continue; }
-      await this.pullIfMissing(sc.image);
-      const vol = `${this.svcName(n)}-data`;
-      if (sc.volume) await this.docker.createVolume({ Name: vol, Labels: labels(n) });
-      const created = await this.docker.createContainer({
-        name: this.svcName(n), Image: sc.image, Labels: labels(n),
-        Env: Object.entries(sc.env ?? {}).map(([k, v]) => `${k}=${v}`),
-        NetworkingConfig: { EndpointsConfig: { [this.name]: { Aliases: [n] } } },
-        HostConfig: {
-          NetworkMode: this.name,
-          Binds: sc.volume ? [`${vol}:${sc.volume}`] : undefined,
-          NanoCpus: Math.round((sc.cpus ?? 1) * 1e9),
-          Memory: parseMemory(sc.memory ?? '512m'),
-          PidsLimit: 512,
-          RestartPolicy: { Name: 'no' },
-          SecurityOpt: ['no-new-privileges:true'],
-          CapDrop: ['NET_RAW'],
-        },
-      });
-      await created.start();
+      else if (info) {
+        // limits changed in bivouac.yml (or by a newer default): applied to the running container, or by recreating it
+        // (the data volume is kept) when Docker refuses, for example because the new limit is below what it uses now
+        if (info.HostConfig.Memory !== memory || info.HostConfig.NanoCpus !== nanoCpus) {
+          try { await c.update({ Memory: memory, MemorySwap: memory, NanoCpus: nanoCpus } as never); }
+          catch { await c.remove({ force: true }).catch(() => {}); await this.createService(spec, n, sc, labels(n), memory, nanoCpus); continue; }
+        }
+        if (!info.State.Running) await c.start();
+        continue;
+      }
+      await this.createService(spec, n, sc, labels(n), memory, nanoCpus);
     }
+  }
+  private async createService(spec: SandboxSpec, n: string, sc: ServiceConfig, labels: Record<string, string>, memory: number, nanoCpus: number) {
+    await this.pullIfMissing(sc.image);
+    const vol = `${this.svcName(n)}-data`;
+    if (sc.volume) await this.docker.createVolume({ Name: vol, Labels: labels }).catch(() => {});
+    const created = await this.docker.createContainer({
+      name: this.svcName(n), Image: sc.image, Labels: labels,
+      Env: Object.entries(sc.env ?? {}).map(([k, v]) => `${k}=${v}`),
+      NetworkingConfig: { EndpointsConfig: { [this.name]: { Aliases: [n] } } },
+      HostConfig: {
+        NetworkMode: this.name,
+        Binds: sc.volume ? [`${vol}:${sc.volume}`] : undefined,
+        NanoCpus: nanoCpus,
+        // no swap: a service over its limit is killed (and reported) instead of crawling
+        Memory: memory, MemorySwap: memory,
+        PidsLimit: 512,
+        RestartPolicy: { Name: 'no' },
+        SecurityOpt: ['no-new-privileges:true'],
+        CapDrop: ['NET_RAW'],
+      },
+    });
+    await created.start();
+    void spec;
+  }
+  async serviceStates(): Promise<ServiceState[]> {
+    const out: ServiceState[] = [];
+    for (const c of await this.docker.listContainers({ all: true, filters: { label: [`bivouac.task=${this.opts.taskId}`, 'bivouac.service'] } }).catch(() => [])) {
+      const i = await this.docker.getContainer(c.Id).inspect().catch(() => null);
+      if (!i) continue;
+      out.push({ name: c.Labels['bivouac.service'], running: i.State.Running, oomKilled: !!i.State.OOMKilled, exitCode: i.State.Running ? null : i.State.ExitCode, restartCount: i.RestartCount ?? 0, startedAt: i.State.StartedAt, finishedAt: i.State.FinishedAt, memoryLimit: i.HostConfig.Memory ?? 0 });
+    }
+    return out;
+  }
+  async restartService(name: string) {
+    if (!/^[a-z0-9-]{1,30}$/.test(name)) return;
+    await this.docker.getContainer(this.svcName(name)).start().catch((e: any) => { if (e?.statusCode !== 304) throw e; });
   }
   private async pullIfMissing(image: string) {
     if (await this.docker.getImage(image).inspect().then(() => true, () => false)) return;
@@ -374,6 +419,8 @@ export class LocalSandbox extends HostWorkspace implements Sandbox {
     });
   }
   async serviceLogs() { return ''; }
+  async serviceStates(): Promise<ServiceState[]> { return []; }
+  async restartService() { /* no services in local sandboxes */ }
   async isRunning() { return true; }
   async stop() { this.sup?.kill('SIGTERM'); this.sup = null; }
   async destroy() { await this.stop(); this.removeWorkspace(path.dirname(this.hostWs)); }

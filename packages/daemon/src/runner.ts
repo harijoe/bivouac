@@ -8,6 +8,7 @@ import { buildInitialPrompt, buildInstructionPrompt, buildRetryPrompt, describeE
 import type { Sandbox } from './sandbox.js';
 import type { Project } from '@bivouac/shared';
 import { claudeEnv, resolveClaude } from './accounts.js';
+import { ServiceWatch } from './service-watch.js';
 import { describeRuntime, detectRuntime, miseConfig, RUNTIME_FILES, runtimeKey, type RuntimeSpec } from './runtime.js';
 
 export type SandboxFactory = (task: Task) => Sandbox;
@@ -211,6 +212,16 @@ export class TaskManager {
       cpus: eff.limits?.cpus, memory: eff.limits?.memory, services: eff.services ?? {},
     });
     await startSandbox();
+    const watch = new ServiceWatch(this.store, id, sb);
+    await watch.baseline();
+    watch.start();
+    try {
+      return await this.runLoop(id, a, task, project, sb, eff, startSandbox, watch);
+    } finally { watch.stop(); }
+  }
+
+  private async runLoop(id: number, a: Active, task0: Task, project: Project, sb: Sandbox, eff0: ProjectConfig, startSandbox: () => Promise<void>, watch: ServiceWatch) {
+    let task = task0, eff = eff0;
     let runtime = await this.prepareRuntime(id, sb, eff, a);
     if (a.stop) return this.finishStopped(id);
     let servicesKey = JSON.stringify(eff.services ?? {});
@@ -252,7 +263,7 @@ export class TaskManager {
       eff = await this.loadConfig(task, project, sb, true);
       runtime = await this.prepareRuntime(id, sb, eff, a);
       if (a.stop) return this.finishStopped(id);
-      if (JSON.stringify(eff.services ?? {}) !== servicesKey) { servicesKey = JSON.stringify(eff.services ?? {}); await startSandbox(); }
+      if (JSON.stringify(eff.services ?? {}) !== servicesKey) { servicesKey = JSON.stringify(eff.services ?? {}); await startSandbox(); await watch.baseline(); }
       await writeDev();
       const env = describeEnvironment({ ports: this.store.getTask(id)!.ports, services: Object.entries(eff.services ?? {}).map(([name, v]) => ({ name, image: v.image })), configError: this.store.getTask(id)!.configError });
       const instructions = this.store.takeInstructions(id);
@@ -265,8 +276,12 @@ export class TaskManager {
       } else {
         prompt = instructions.length ? buildInstructionPrompt(instructions, env) : `Continue working on the task. Make sure \`${successCmd}\` passes.${env.length ? '\n' + env.join('\n') : ''}`;
       }
+      await watch.check();
+      const notices = watch.takeNotices();
+      if (notices.length) prompt += '\n\nNote from bivouac about the services of this task:\n' + notices.map((n) => `- ${n}`).join('\n');
       this.store.setStatus(id, 'running');
       const run = await this.runClaude(id, a, sb, prompt, task, remaining, iteration);
+      await watch.check();
       if (a.stop) return this.finishStopped(id);
       if (run.outcome === 'budget') return void this.store.setStatus(id, 'budget_exceeded');
       if (run.outcome === 'failed') throw new Error(run.error);

@@ -1,4 +1,4 @@
-import type { ExecOpts, PrepareOpts, Sandbox, SandboxSpec } from './sandbox.js';
+import type { ExecOpts, PrepareOpts, Sandbox, SandboxSpec, ServiceState } from './sandbox.js';
 import type { LoginSession } from './executor.js';
 
 /** Client for the executor API. Implements Sandbox so the task runner does not care where Docker lives. */
@@ -38,6 +38,8 @@ export class RemoteSandbox implements Sandbox {
     return (await this.c.call('GET', this.p('tail', q))) as { text: string; start: number; end: number; size: number };
   }
   async serviceLogs(name: string, tail: number) { return (await this.c.call('GET', this.p('service-logs', `&name=${encodeURIComponent(name)}&tail=${tail}`))).text as string; }
+  async serviceStates() { return (await this.c.call('GET', this.p('service-states'))).states as ServiceState[]; }
+  async restartService(name: string) { await this.c.call('POST', this.p('service-restart', `&name=${encodeURIComponent(name)}`)); }
   async fingerprint() { return (await this.c.call('GET', this.p('fingerprint'))).hash as string; }
   async readFile(rel: string) { return (await this.c.call('GET', this.p('file', `&path=${encodeURIComponent(rel)}`))).content as string | null; }
   async writeFile(rel: string, content: string) { await this.c.call('PUT', this.p('file'), { path: rel, content }); }

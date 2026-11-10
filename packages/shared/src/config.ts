@@ -10,6 +10,10 @@ export interface ServiceConfig {
   memory?: string;
 }
 
+/** Defaults of a sidecar service (a database under real load needs more than the 512 MB it used to get). */
+export const DEFAULT_SERVICE_MEMORY = '1g';
+export const DEFAULT_SERVICE_CPUS = 1;
+
 export interface ProjectConfig {
   setup?: string;
   /** Tool versions forced for the task (`node: "26"`, `python: "3.12"`…); wins over what the repository declares. */
