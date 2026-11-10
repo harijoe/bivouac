@@ -11,6 +11,7 @@ import { TOKEN_LIFETIME_DAYS } from './claude.js';
 import { resolveClaude } from './accounts.js';
 import type { Updates } from './updates.js';
 import type { ProjectContext } from './projectcontext.js';
+import { attemptEvents, listAttempts, searchAttempts } from './attempts.js';
 
 /** An error whose message is safe and useful to show to a person or to a model (it says what to do next). */
 export class UserError extends Error {
@@ -411,17 +412,34 @@ export class Service {
     return `${port?.url ?? t.previewUrl}/?bv_ticket=${this.previews.createTicket(t.id)}`;
   }
 
-  /** What an assistant needs to report on a task: the status plus the last things the agent said. */
-  describeTask(t: Task) {
-    const events = this.store.listEvents(t.id, 0, 5000);
-    const messages = events.filter((e) => e.kind === 'assistant_text').slice(-3).map((e) => String(e.data.text ?? '').slice(0, 600));
-    const checks = events.filter((e) => e.kind === 'check');
-    const lastCheck = checks[checks.length - 1];
+  // ---- history by attempt
+  /** Attempts of a task, newest first, one page at a time (see attempts.ts). */
+  attemptsPage(t: Task, o: { before?: number; limit?: number; only?: number[] } = {}) {
+    return listAttempts(this.store.db, t.id, { ...o, activeAttempt: t.status === 'running' || t.status === 'checking' ? t.iteration : null });
+  }
+  attemptEvents(t: Task, attempt: number) { return attemptEvents(this.store.db, t.id, attempt); }
+  searchAttempts(t: Task, text: string) { return searchAttempts(this.store.db, t.id, text); }
+
+  /** What an assistant needs to report on a task: the status plus the last things the agent said and a page of attempts. */
+  describeTask(t: Task, o: { attemptsBefore?: number; attemptsLimit?: number } = {}) {
+    const messages = this.store.lastEvents(t.id, 'assistant_text', 3).map((e) => String(e.data.text ?? '').slice(0, 600));
+    const lastCheck = this.store.lastEvents(t.id, 'check', 1)[0];
+    const limit = Math.min(Math.max(Math.trunc(o.attemptsLimit ?? 10), 1), 50);
+    const page = this.attemptsPage(t, { before: o.attemptsBefore, limit });
+    const oldest = page.attempts.at(-1)?.attempt;
+    const markerText = (m: { kind: string; text?: string; status?: string }) => (m.kind === 'instruction' ? `instruction: ${String(m.text).slice(0, 200)}` : m.kind === 'limits' ? String(m.text) : `task ${m.status}`);
     return {
       ...this.summary(t),
       pendingInstructions: this.store.pendingInstructionCount(t.id),
       lastMessages: messages,
       lastCheck: lastCheck ? { command: lastCheck.data.command, exitCode: lastCheck.data.exitCode, output: String(lastCheck.data.output ?? '').slice(-1200) } : null,
+      /** Newest attempt first. `costUsd` is an API-equivalent estimate unless costKind is "cost". Ask again with attemptsBefore = attemptsNextBefore for older ones. */
+      attempts: page.attempts.map((a) => ({
+        attempt: a.attempt, startedAt: a.startedAt, durationSeconds: Math.round(a.durationMs / 1000), running: a.running, costUsd: a.costUsd === null ? null : Number(a.costUsd.toFixed(4)),
+        check: a.check ? (a.check.passed ? 'passed' : `failed (exit code ${a.check.exitCode})`) : 'not run', lastAgentMessage: a.lastMessage ? a.lastMessage.slice(0, 200) : null,
+        startedAfter: a.markers.map(markerText),
+      })),
+      attemptsNextBefore: page.hasMore && oldest ? oldest : null,
       shareLinks: this.previews.listShares(t.id).filter((s) => s.active).map((s) => ({ id: s.id, url: this.shareUrl(t, this.previews.shareToken(s.id) ?? ''), urls: this.shareUrls(t, this.previews.shareToken(s.id) ?? ''), expiresAt: s.expiresAt ? new Date(s.expiresAt * 1000).toISOString() : null })),
     };
   }

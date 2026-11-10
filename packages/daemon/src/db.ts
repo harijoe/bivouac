@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, iteration INTEGER NOT NULL,
   kind TEXT NOT NULL, data_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
 CREATE INDEX IF NOT EXISTS events_task ON events(task_id, id);
+CREATE INDEX IF NOT EXISTS events_attempt ON events(task_id, iteration, id);
 CREATE TABLE IF NOT EXISTS users (
   github_id INTEGER PRIMARY KEY, login TEXT NOT NULL, name TEXT, avatar_url TEXT, role TEXT NOT NULL DEFAULT 'user',
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), last_login_at TEXT);
@@ -323,6 +324,10 @@ export class Store {
   }
   listEvents(taskId: number, afterId = 0, limit = 5000): TaskEvent[] {
     return this.db.prepare('SELECT * FROM events WHERE task_id=? AND id>? ORDER BY id LIMIT ?').all(taskId, afterId, limit).map((r) => this.eventFromRow(r));
+  }
+  /** The most recent events of one kind, oldest first among them. */
+  lastEvents(taskId: number, kind: EventKind, n: number): TaskEvent[] {
+    return this.db.prepare('SELECT * FROM events WHERE task_id=? AND kind=? ORDER BY id DESC LIMIT ?').all(taskId, kind, n).reverse().map((r) => this.eventFromRow(r));
   }
   addInstruction(taskId: number, text: string) {
     this.db.prepare('INSERT INTO instructions(task_id,text) VALUES(?,?)').run(taskId, text);

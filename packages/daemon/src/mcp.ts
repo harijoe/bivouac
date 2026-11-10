@@ -45,9 +45,9 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
       return svc.store.listTasks(p?.id).filter((t) => !a.status || t.status === a.status).map((t) => svc.summary(t));
     });
 
-  tool('get_task', 'Get task details', 'Get one task: status, iteration, cost (costKind says whether it is a real cost or an API-equivalent estimate on a subscription), the reason when blocked or stuck (error), the last messages from the agent (summarised), the result of the last success check, the preview URL, the dashboard link, the PR link and active share links. Poll this after create_task until the status is final.', READ,
-    { project: PROJECT, task: TASK },
-    (a) => svc.describeTask(svc.resolveTask(a.project, a.task)));
+  tool('get_task', 'Get task details', 'Get one task: status, iteration, cost (costKind says whether it is a real cost or an API-equivalent estimate on a subscription), the reason when blocked or stuck (error), the last messages from the agent (summarised), the result of the last success check, the preview URL, the dashboard link, the PR link and active share links, and a summary per attempt (newest first, 10 by default: start time, duration, cost, result of the success check, beginning of the last agent message, what triggered it). For a long task pass attempts_before (the attemptsNextBefore of the previous answer) to read older attempts. Poll this after create_task until the status is final.', READ,
+    { project: PROJECT, task: TASK, attempts_limit: z.number().int().min(1).max(50).optional().describe('How many attempts to list (default 10, newest first).'), attempts_before: z.number().int().positive().optional().describe('Pagination: list attempts older than this attempt number (use attemptsNextBefore from the previous answer).') },
+    (a) => svc.describeTask(svc.resolveTask(a.project, a.task), { attemptsBefore: a.attempts_before, attemptsLimit: a.attempts_limit }));
 
   tool('create_task', 'Create and start a task',
     'Start a Claude Code agent on a project, in its own container, branch and live preview. Returns immediately with the preview URL and dashboard link; use get_task to follow progress. ' +

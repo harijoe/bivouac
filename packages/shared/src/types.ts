@@ -94,3 +94,48 @@ export interface TaskEvent {
   data: any;
   createdAt: string;
 }
+
+/** Something that happened between two attempts of a task: an instruction, a state change, a change of limits. */
+export interface HistoryMarker {
+  id: number;
+  kind: 'instruction' | 'state' | 'limits';
+  at: string;
+  /** instruction: the text; limits: the sentence describing the change. */
+  text?: string;
+  /** instruction: not yet taken into account by an agent. */
+  queued?: boolean;
+  /** state: the status the task went to. */
+  status?: string;
+  /** state: the reason (error, blocked or stuck explanation). */
+  error?: string | null;
+}
+
+/** One agent attempt (one run of the agent plus its success check), as shown in the history header and by get_task. */
+export interface AttemptSummary {
+  attempt: number;
+  startedAt: string;
+  /** Last activity of the attempt; null while it is running. */
+  endedAt: string | null;
+  durationMs: number;
+  running: boolean;
+  /** Cost reported by the agent for this attempt (an API-equivalent estimate with a subscription); null until it ends. */
+  costUsd: number | null;
+  /** Result of the success check of this attempt; null when it did not get that far. */
+  check: { passed: boolean; exitCode: number; command: string } | null;
+  /** Beginning of the last thing the agent said in this attempt. */
+  lastMessage: string | null;
+  firstEventId: number;
+  lastEventId: number;
+  /** What happened just before this attempt started (instructions, resumption, limits changed, the reason it stopped before). */
+  markers: HistoryMarker[];
+}
+
+export interface AttemptsPage {
+  attempts: AttemptSummary[];
+  /** Older attempts exist; ask again with `before` = the oldest attempt number returned. */
+  hasMore: boolean;
+  /** Highest event id of the task now: open the live stream after it. */
+  lastEventId: number;
+  /** Markers after the newest attempt (only on the first page). */
+  trailing: HistoryMarker[];
+}

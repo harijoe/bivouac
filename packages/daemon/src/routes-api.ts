@@ -126,6 +126,13 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   app.get('/api/tasks/:id', run((c) => c.json({ ...view(taskOf(c)), shares: shareList(taskOf(c)) })));
   const shareList = (t: Task) => previews.listShares(t.id).map((s) => ({ ...s, url: s.active ? svc.shareUrl(t, previews.shareToken(s.id) ?? '') : null, urls: s.active ? svc.shareUrls(t, previews.shareToken(s.id) ?? '') : [] }));
   app.get('/api/tasks/:id/events', run((c) => c.json(store.listEvents(taskOf(c).id, Number(c.req.query('after') ?? 0)))));
+  // history by attempt (newest first, a page at a time); events of one attempt; search
+  app.get('/api/tasks/:id/attempts', run((c) => {
+    const only = c.req.query('only') ? String(c.req.query('only')).split(',').map(Number) : undefined;
+    return c.json(svc.attemptsPage(taskOf(c), { before: c.req.query('before') ? Number(c.req.query('before')) : undefined, limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined, only }));
+  }));
+  app.get('/api/tasks/:id/attempts/:n/events', run((c) => c.json(svc.attemptEvents(taskOf(c), Number(param(c, 'n'))))));
+  app.get('/api/tasks/:id/history/search', run((c) => c.json(svc.searchAttempts(taskOf(c), String(c.req.query('q') ?? '')))));
   app.get('/api/tasks/:id/devlogs', run(async (c) => c.json({ text: await ctx.mgr.devLogs(taskOf(c).id, Number(c.req.query('lines') ?? 200)) })));
   app.post('/api/tasks/:id/stop', run(async (c) => c.json(view(await svc.stopTask(taskOf(c), actorOf(c))))));
   app.post('/api/tasks/:id/resume', run(async (c) => {
