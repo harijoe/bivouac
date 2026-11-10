@@ -43,3 +43,7 @@
 - **`stuck`** compares the output of two consecutive failed checks and a fingerprint of the working tree (a throwaway git index, `.bivouac` excluded, so the agent's own staging area is untouched).
 - **The login code is typed, then Enter is sent in a separate write** (Ink treats a single write as a paste). The screen of `claude setup-token` is rebuilt with `@xterm/headless` before extracting anything, because the CLI repaints only changed cells.
 - **Costs with a subscription** are labelled "estimated API equivalent" (`costKind` in the API and in `get_task`); the dollar budget keeps bounding consumption either way.
+
+## v0.4
+
+- **CSP: `style-src 'self' 'unsafe-inline'`.** shadcn/Radix (popper positioning), Sonner and the virtualized log list set `style` attributes, which a strict `style-src` blocks. Scripts stay `script-src 'self'` (no inline, no eval); the theme initialiser is a served file (`/theme-init.js`), not an inline script. Style injection cannot execute code, and the app has no user-supplied HTML.

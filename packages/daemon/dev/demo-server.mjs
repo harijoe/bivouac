@@ -22,7 +22,7 @@ const cfg = {
   domain: 'demo.example.com', previewScheme: 'http', previewPort: port, traefikContainer: 'x', webHost: 'x', certResolver: null, maxParallel: 4, taskUid: 1000,
   dashboardDir: path.join(root, 'packages/dashboard/dist'), secretKey: key, executorUrl: null, executorToken: 'x', oauthToken: 'sk-ant-oat01-demo', apiKey: null,
   oauthRedirectAllow: ['https://claude.ai/*'], testMode: true,
-  version: '0.2.0', releasesUrl: 'http://127.0.0.1:1/none', daemonImage: '', hostOptDir: '/opt/bivouac',
+  version: '0.4.0', releasesUrl: 'http://127.0.0.1:1/none', daemonImage: '', hostOptDir: '/opt/bivouac',
 };
 const store = new Store(path.join(dataDir, 'demo.db'), key);
 const sandboxes = new Map();
@@ -31,7 +31,8 @@ const mockGithub = async (url) => {
   const j = (v) => new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json' } });
   if (u.includes('/access_tokens')) return j({ token: 'ghs_x', expires_at: new Date(Date.now() + 3600e3).toISOString() });
   if (u.includes('/app/installations')) return j([{ id: 1, account: { login: 'julien', type: 'User' } }]);
-  if (u.includes('/installation/repositories')) return j({ repositories: [{ full_name: 'julien/mon-app', default_branch: 'main', private: true }, { full_name: 'julien/api-gateway', default_branch: 'main', private: true }, { full_name: 'julien/blog', default_branch: 'main', private: false }] });
+  if (u.includes('/installation/repositories')) return j({ repositories: [{ full_name: 'julien/mon-app', default_branch: 'main', private: true, pushed_at: '2026-11-09T10:00:00Z', owner: { login: 'julien' } }, { full_name: 'julien/api-gateway', default_branch: 'main', private: true, pushed_at: '2026-11-01T10:00:00Z', owner: { login: 'julien' } }, { full_name: 'julien/blog', default_branch: 'main', private: false }] });
+  if (u.includes('/pulls?state=open')) return j([{ number: 12, html_url: 'https://github.com/julien/mon-app/pull/12', title: 'Add a dark mode toggle', head: { ref: 'agent/t-1-dark-mode' } }]);
   return j({});
 };
 const ctx = buildContext({
@@ -45,8 +46,11 @@ const pem = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding
 ctx.gh.save({ id: 1, slug: 'bivouac-demo', name: 'bivouac-demo', clientId: 'Iv1.demo', clientSecret: 's', pem, webhookSecret: 'w', htmlUrl: 'https://github.com/apps/bivouac-demo', ownerLogin: 'julien' });
 ctx.auth.upsertUser({ githubId: 1, login: 'julien', name: 'Julien' }, 'admin');
 ctx.auth.upsertUser({ githubId: 2, login: 'camille' }, 'user'); ctx.auth.addAllowed('user', '2', 'camille'); ctx.auth.addAllowed('org', 'acme', 'acme');
-store.setSecretSetting('claude_oauth_token', 'sk-ant-oat01-demo');
-store.setSetting('claude_token_at', new Date(Date.now() - 20 * 86400e3).toISOString());
+const perso = store.createClaudeAccount({ name: 'Perso', kind: 'oauth', secret: 'sk-ant-oat01-demo' });
+store.db.prepare('UPDATE claude_accounts SET connected_at=? WHERE id=?').run(new Date(Date.now() - 20 * 86400e3).toISOString(), perso);
+const pro = store.createClaudeAccount({ name: 'Alpic pro', kind: 'oauth', secret: 'sk-ant-oat01-demo-pro' });
+store.db.prepare('UPDATE claude_accounts SET connected_at=? WHERE id=?').run(new Date(Date.now() - 350 * 86400e3).toISOString(), pro);
+store.createClaudeAccount({ name: 'CI key', kind: 'apikey', secret: 'sk-ant-api03-demo-demo-demo-demo-demo' });
 const sid = ctx.auth.createSession(1, 'test');
 
 const remote = mkdtempSync(path.join(tmpdir(), 'bv-demo-remote-'));
@@ -67,6 +71,21 @@ const seed = [
 ];
 for (const [name, prompt] of seed) {
   await ctx.svc.createTask({ project: p.name, name, prompt, successCommand: 'grep -q ok fake-output.txt', maxCostUsd: name === 'vite-6' ? 4 : 5 }, actor).catch((e) => console.error(e.message));
+}
+// a blocked task and a stuck one, and a dev log with colours for the log viewer
+for (const [name, status, error] of [['node-26', 'blocked', 'This repository requires Node >= 26 and I cannot install it without root.\nI need: a runtime entry in bivouac.yml, or a different base version.'], ['flaky-e2e', 'stuck', 'The success command failed twice in a row with the same output and no change to the code.\nError: timeout of 5000ms exceeded']]) {
+  const t = await ctx.svc.createTask({ project: p.name, name, prompt: `Demo ${name}`, successCommand: 'true', maxCostUsd: 3 }, actor).then((r) => r.task).catch(() => null);
+  if (t) { await ctx.mgr.stop(t.id).catch(() => {}); store.setStatus(t.id, status, error); }
+}
+const first = store.getTaskByName(p.id, 'dark-mode');
+if (first) {
+  const ws = sandboxes.get(first.id)?.ws;
+  if (ws) {
+    const { mkdirSync, writeFileSync: wf } = await import('node:fs');
+    mkdirSync(path.join(ws, '.bivouac'), { recursive: true });
+    const L = ['\x1b[36mVITE\x1b[0m v6.0.1  ready in \x1b[1m312\x1b[0m ms', '  \x1b[32m➜\x1b[0m  Local:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[0m/', '\x1b[33mwarn\x1b[0m  deprecated option "foo"', '\x1b[31mError:\x1b[0m connect ECONNREFUSED postgres:5432', ...Array.from({ length: 400 }, (_, i) => `request GET /api/items?page=${i} 200 ${10 + (i % 40)}ms`)];
+    wf(path.join(ws, '.bivouac/dev.log'), L.map((l, i) => `10:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.${String(i * 7 % 1000).padStart(3, '0')} ${l}`).join('\n') + '\n');
+  }
 }
 ctx.svc.auth.audit('julien', 'login');
 const setupCode = ctx.auth.createSetupCode();

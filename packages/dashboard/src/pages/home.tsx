@@ -1,78 +1,61 @@
-import { useCallback, useEffect, useState } from 'react';
-import { isTerminal } from '@bivouac/shared';
-import { ago, api, fmtUsd, type ProjectWithTotals, type Session, type TaskView } from '../api';
-import { Empty, Link, StatusPill, Spinner, useNow, useStream } from '../ui';
+import { FolderGit2, Plus } from 'lucide-react';
+import { api, type ClaudeAccount, type ProjectWithTotals, type Session } from '@/api';
+import { ConnectChatCard } from '@/components/app/connect-chat-card';
+import { EmptyState, Note, PageHeader } from '@/components/app/misc';
+import { ProjectCard } from '@/components/app/project-card';
+import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
+import { useLoad, useNow, useStream } from '@/lib/hooks';
+import { Link } from '@/lib/router';
 
-interface Props { session: Session }
-
-export function TaskCard({ t, now }: { t: TaskView; now: number }) {
-  const open = async (e: React.MouseEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    const w = window.open('', '_blank');
-    try { const r = await api('POST', `/api/tasks/${t.id}/preview-link`); if (w) w.location.href = r.url; } catch { w?.close(); }
-  };
-  return (
-    <Link to={`/projects/${t.projectName}/${t.name}`} className="task-card">
-      <div className="task-top"><span className="task-name">{t.name}</span><StatusPill s={t.status} /></div>
-      <p className="task-title">{t.title}</p>
-      <div className="task-meta">
-        <span title={t.costKind === 'cost' ? 'Cost' : 'Estimated API-equivalent value, not a spend (Claude subscription)'}>{fmtUsd(t.usage.costUsd)}{t.costKind === 'cost' ? '' : ' est.'}</span>
-        <span>{isTerminal(t.status) ? ago(t.finishedAt, now) : `attempt ${Math.max(1, t.iteration)} of ${t.maxIterations}`}</span>
-        {t.devPort && t.status !== 'queued' && <button className="link-btn" onClick={open}>Open preview ↗</button>}
-      </div>
-    </Link>
-  );
+/** The one thing that blocks starting tasks, if any. */
+function NextStep({ accounts, session }: { accounts: ClaudeAccount[] | null; session: Session }) {
+  const admin = session.user?.role === 'admin';
+  if (accounts && !accounts.some((a) => !a.expired)) {
+    const expired = accounts.length > 0;
+    return (
+      <Note tone="warn" title={expired ? 'Your Claude token expired' : 'Claude is not connected'}>
+        {expired ? 'Reconnect it so tasks can run again. ' : 'Agents need a Claude account to work. '}
+        {admin ? <Link to="/settings/claude" className="font-medium underline underline-offset-4">{expired ? 'Reconnect Claude' : 'Connect Claude'}</Link> : 'Ask an administrator to connect one.'}
+      </Note>
+    );
+  }
+  if (!session.githubReady) {
+    return (
+      <Note tone="warn" title="GitHub is not connected">
+        Projects and pull requests need GitHub. {admin ? <Link to="/settings/projects" className="font-medium underline underline-offset-4">Connect GitHub in Settings</Link> : 'Ask an administrator to connect it.'}
+      </Note>
+    );
+  }
+  return null;
 }
 
-export function Home({ session }: Props) {
-  const [projects, setProjects] = useState<ProjectWithTotals[] | null>(null);
-  const [tasks, setTasks] = useState<TaskView[]>([]);
-  const [claude, setClaude] = useState<{ connected: boolean; expired: boolean } | null>(null);
-  const load = useCallback(() => {
-    void api('GET', '/api/projects').then(setProjects);
-    void api('GET', '/api/tasks').then(setTasks);
-    void api('GET', '/api/claude').then(setClaude);
-  }, []);
-  useEffect(load, [load]);
-  useStream('/api/stream', { task: load, project: load });
+export function Home({ session }: { session: Session }) {
+  const projects = useLoad(() => api<ProjectWithTotals[]>('GET', '/api/projects'));
+  const accounts = useLoad(() => api<ClaudeAccount[]>('GET', '/api/claude/accounts').catch(() => null));
+  const reload = projects.reload;
+  useStream('/api/stream', { task: reload, project: reload });
   const now = useNow(true);
-  if (!projects) return <Spinner />;
-
-  const working = tasks.filter((t) => !isTerminal(t.status)).length;
-  const done = tasks.filter((t) => t.status === 'succeeded').length;
-  const spent = projects.reduce((s, p) => s + p.totals.costUsd, 0);
   const admin = session.user?.role === 'admin';
-
-  // one next step at a time, in the order a new user needs them
-  let next: { title: string; text: string; to: string; cta: string } | null = null;
-  if (claude && (!claude.connected || claude.expired)) next = { title: claude.expired ? 'Your Claude token expired' : 'Connect Claude', text: claude.expired ? 'Reconnect it so tasks can run again.' : 'Agents need your Claude account to work.', to: '/settings#claude', cta: claude.expired ? 'Reconnect' : 'Connect Claude' };
-  else if (projects.length === 0 && admin) next = { title: 'Add a project', text: 'Pick a GitHub repository for the agents to work on.', to: '/settings#projects', cta: 'Add a project' };
+  const list = projects.data;
 
   return (
-    <>
-      {next && (
-        <section className="callout">
-          <div><b>{next.title}</b><p>{next.text}</p></div>
-          <Link to={next.to} className="btn primary">{next.cta}</Link>
-        </section>
+    <div className="space-y-6">
+      <PageHeader title="Projects" actions={list && list.length > 0 && <Button asChild className="h-11 sm:h-9"><Link to="/new"><Plus />New task</Link></Button>} />
+      <NextStep accounts={accounts.data} session={session} />
+      <ConnectChatCard mcpUrl={session.mcpUrl} connected={session.mcpConnected} />
+      {projects.error && !list && <Note tone="error" title="Could not load the projects">{projects.error}. Reload the page to try again.</Note>}
+      {!list && !projects.error && (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-64 w-full" />)}</div>
       )}
-      {tasks.length > 0 && (
-        <p className="summary">
-          <span><b>{working}</b> working</span><span><b>{done}</b> done</span><span><b>{fmtUsd(spent)}</b> {tasks[0]?.costKind === 'cost' ? 'spent' : 'estimated API equivalent'}</span>
-        </p>
+      {list && list.length === 0 && (
+        <EmptyState icon={FolderGit2} title="No project yet" action={admin ? <Button asChild className="mt-2 h-11 sm:h-9"><Link to="/settings/projects">Add a project</Link></Button> : undefined}>
+          {admin ? 'Pick a GitHub repository for the agents to work on.' : 'Ask an administrator to add a GitHub repository.'}
+        </EmptyState>
       )}
-      {projects.length === 0 && !next && <Empty title="No project yet"><p className="muted">Ask an administrator to add a GitHub repository.</p></Empty>}
-      {projects.map((p) => {
-        const pt = tasks.filter((t) => t.projectId === p.id);
-        return (
-          <section key={p.id} className="project">
-            <header className="project-head"><h2>{p.name}</h2><span className="muted">{p.totals.tasks} {p.totals.tasks === 1 ? 'task' : 'tasks'} · {fmtUsd(p.totals.costUsd)}</span></header>
-            {pt.length === 0
-              ? <Empty title="No tasks yet"><p className="muted">Ask Claude to create one.</p><Link to="/connect" className="btn secondary">Connect your chat</Link></Empty>
-              : <div className="task-list">{pt.map((t) => <TaskCard key={t.id} t={t} now={now} />)}</div>}
-          </section>
-        );
-      })}
-    </>
+      {list && list.length > 0 && (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{list.map((p) => <ProjectCard key={p.id} p={p} now={now} />)}</div>
+      )}
+    </div>
   );
 }

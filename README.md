@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/harijoe/bivouac/main/install.sh | s
 There are no questions. The installer installs Docker if needed, starts bivouac, gets a certificate for `https://<ip-with-dashes>.sslip.io`, and prints a **one-time setup link** with a QR code:
 
 ```
-  bivouac 0.3.1 is running. Open this link to finish the setup (it works once):
+  bivouac 0.4.0 is running. Open this link to finish the setup (it works once):
 
     https://203-0-113-7.sslip.io/setup?code=K7QM-4TXD
 ```

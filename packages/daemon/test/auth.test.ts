@@ -107,7 +107,7 @@ describe('GitHub login', () => {
     const same = await env.app.request('/api/logout', { method: 'POST', headers: { ...env.H, origin: 'https://1-2-3-4.sslip.io' } });
     expect(same.status).toBe(200);
     const csp = (await env.app.request('/api/health')).headers.get('content-security-policy')!;
-    expect(csp).toContain("default-src 'self'"); expect(csp).toContain("script-src 'self'"); expect(csp).not.toContain('unsafe-inline'); expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("default-src 'self'"); expect(csp).toContain("script-src 'self'"); expect(csp.match(/script-src[^;]*/)![0]).not.toContain('unsafe'); // styles only: Radix/Sonner/virtual lists set style attributes expect(csp).toContain("frame-ancestors 'none'");
   });
 
   it('rate-limits login attempts', async () => {

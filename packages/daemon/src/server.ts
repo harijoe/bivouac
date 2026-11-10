@@ -20,7 +20,7 @@ export function setSessionCookie(ctx: Ctx, c: C, id: string) {
 }
 
 const CSP = [
-  "default-src 'self'", "script-src 'self'", "style-src 'self'", "img-src 'self' https://avatars.githubusercontent.com data:", "font-src 'self'",
+  "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' https://avatars.githubusercontent.com data:", "font-src 'self'",
   "connect-src 'self'", "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self' https://github.com",
 ].join('; ');
 
@@ -55,6 +55,8 @@ export function createApp(ctx: Ctx) {
     return c.json({
       user: u, version: cfg.version, domain: cfg.domain, baseUrl: baseUrl(cfg), githubReady: ctx.gh.configured,
       setupOpen: auth.setupOpen(), base: baseUrl(cfg), mcpUrl: `${baseUrl(cfg)}/mcp`,
+      // a chat client (Claude, ChatGPT…) has been connected at least once: the home page then shrinks its "connect your chat" block
+      mcpConnected: ctx.oauth.listGrants().length > 0,
     });
   });
   app.post('/api/logout', (c) => {
@@ -206,6 +208,7 @@ export function createApp(ctx: Ctx) {
     const index = () => readFileSync(path.join(dir, 'index.html'), 'utf8');
     app.use('/assets/*', serveStatic({ root: path.relative(process.cwd(), dir) || '.' }));
     app.get('/favicon.svg', serveStatic({ root: path.relative(process.cwd(), dir) || '.' }));
+    app.get('/theme-init.js', serveStatic({ root: path.relative(process.cwd(), dir) || '.' }));
     app.get('*', (c) => {
       if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/.well-known/')) return c.json({ error: 'not found' }, 404);
       c.header('Cache-Control', 'no-store');

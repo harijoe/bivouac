@@ -3,6 +3,7 @@ import { streamSSE } from 'hono/streaming';
 import { parseProjectConfig, type Task } from '@bivouac/shared';
 import type { AppEnv, C, Ctx } from './context.js';
 import { baseUrl } from './config.js';
+import { TaskLogs } from './logs.js';
 import { loginState, type LoginState } from './claude.js';
 import type { StoreMessage } from './db.js';
 import { changeDomain } from './routes-setup.js';
@@ -38,7 +39,7 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     if (!t) throw new UserError('This task does not exist (anymore).', 'unknown_task', 404);
     return t;
   };
-  const view = (t: Task) => ({ ...t, costKind: svc.costKind(), dashboardUrl: svc.taskUrl(t), pendingInstructions: store.pendingInstructionCount(t.id), active: ctx.mgr.isActive(t.id) });
+  const view = (t: Task) => ({ ...t, costKind: svc.costKind(t.projectId), dashboardUrl: svc.taskUrl(t), pendingInstructions: store.pendingInstructionCount(t.id), active: ctx.mgr.isActive(t.id) });
 
   app.get('/api/totals', (c) => c.json(store.totals()));
 
@@ -62,6 +63,11 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     const repos = (await ctx.gh.listRepos()).map((r) => ({ ...r, added: taken.has(r.fullName.toLowerCase()) }));
     return c.json({ configured: true, repos, installUrl: ctx.gh.installUrl() });
   }));
+  app.get('/api/projects/:id/pulls', run(async (c) => {
+    const p = store.getProject(Number(param(c, 'id')));
+    if (!p) throw new UserError('This project does not exist.', 'unknown_project', 404);
+    return c.json({ prs: await svc.openPullRequests(p) });
+  }));
   app.post('/api/projects', run(async (c) => {
     admin(c);
     const b = await c.req.json().catch(() => ({}));
@@ -75,7 +81,12 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     const b = await c.req.json().catch(() => ({}));
     let config;
     if (b.config !== undefined) { try { config = typeof b.config === 'string' ? parseProjectConfig(b.config) : b.config; } catch (e: any) { throw new UserError(e.message); } }
-    store.updateProject(p.id, { config, githubToken: b.githubToken, defaultBranch: b.defaultBranch });
+    let claudeAccountId: number | null | undefined;
+    if (b.claudeAccountId !== undefined) {
+      claudeAccountId = b.claudeAccountId === null ? null : Number(b.claudeAccountId);
+      if (claudeAccountId !== null && !store.getClaudeAccount(claudeAccountId)) throw new UserError('This Claude account does not exist.', 'unknown_account', 404);
+    }
+    store.updateProject(p.id, { config, githubToken: b.githubToken, defaultBranch: b.defaultBranch, claudeAccountId });
     return c.json(store.getProject(p.id));
   }));
   app.delete('/api/projects/:id', run((c) => {
@@ -95,6 +106,22 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   app.get('/api/projects/:project/tasks/:task', run((c) => {
     const t = svc.resolveTask(param(c, 'project'), param(c, 'task'));
     return c.json(view(t));
+  }));
+  /**
+   * Creates a task: the same service call as the MCP tool `create_task` (validation, budgets, idempotency, audit), so both
+   * give the same result. The name is optional here and derived from the prompt.
+   */
+  app.post('/api/tasks', run(async (c) => {
+    const b = await c.req.json().catch(() => ({}));
+    if (b.project === undefined || b.project === '') throw new UserError('Choose a project.', 'invalid');
+    const prompt = String(b.prompt ?? '');
+    const name = b.name ? String(b.name) : prompt.trim() ? svc.suggestTaskName(b.project, prompt) : '';
+    const { task, created } = await svc.createTask({
+      project: b.project, name, prompt, successCommand: b.successCommand || undefined,
+      maxIterations: b.maxIterations ? Number(b.maxIterations) : undefined, maxCostUsd: b.maxCostUsd ? Number(b.maxCostUsd) : undefined,
+      maxTokens: b.maxTokens ? Number(b.maxTokens) : undefined, baseBranch: b.baseBranch || undefined, idempotencyKey: b.idempotencyKey || undefined,
+    }, actorOf(c));
+    return c.json(view(task), created ? 201 : 200);
   }));
   app.get('/api/tasks/:id', run((c) => c.json({ ...view(taskOf(c)), shares: shareList(taskOf(c)) })));
   const shareList = (t: Task) => previews.listShares(t.id).map((s) => ({ ...s, url: s.active ? svc.shareUrl(t, previews.shareToken(s.id) ?? '') : null, urls: s.active ? svc.shareUrls(t, previews.shareToken(s.id) ?? '') : [] }));
@@ -217,7 +244,7 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
    * The daemon, not the browser, finishes a sign-in: as soon as the CLI prints a token it is validated and stored,
    * even if the page was closed or reloaded. Idempotent (the watcher and the browser's polling both call it).
    */
-  const logins = new Map<string, { actor: string; state: LoginState; timer: NodeJS.Timeout }>();
+  const logins = new Map<string, { actor: string; name?: string; accountId?: number; state: LoginState; timer: NodeJS.Timeout }>();
   const settleLogin = async (id: string): Promise<LoginState> => {
     const l = needLogin();
     const known = logins.get(id);
@@ -226,12 +253,11 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     const st = await loginState(s.output, s.done, s.exitCode, s.inputAt);
     if (known) known.state = st;
     if (st.phase === 'done' && st.token) {
-      store.setSecretSetting('claude_oauth_token', st.token);
-      store.setSecretSetting('anthropic_api_key', null);
-      store.setSetting('claude_token_at', new Date().toISOString());
-      auth.audit(known?.actor ?? 'system', 'claude_connected', { kind: 'oauth' });
+      let failure: string | null = null;
+      try { svc.saveClaudeLogin({ token: st.token, name: known?.name, accountId: known?.accountId }, known?.actor ?? 'system'); }
+      catch (e: any) { failure = String(e?.message ?? e); }
       await l.loginCancel(id).catch(() => {});
-      const done: LoginState = { phase: 'done' };
+      const done: LoginState = failure ? { phase: 'error', message: failure } : { phase: 'done' };
       if (known) known.state = done;
       return done;
     }
@@ -246,7 +272,18 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     entry.timer.unref();
     logins.set(id, entry);
   };
-  app.post('/api/claude/login', run(async (c) => { admin(c); const s = await needLogin().loginStart(); watchLogin(s.id, actorOf(c).label); return c.json({ id: s.id }); }));
+  /** Starts a sign-in. `accountId` renews that account; otherwise `name` (checked now, not after the user went through the browser) names the new one. */
+  app.post('/api/claude/login', run(async (c) => {
+    admin(c);
+    const b = await c.req.json().catch(() => ({}));
+    const accountId = b.accountId ? Number(b.accountId) : undefined;
+    let name: string | undefined;
+    if (accountId === undefined && (b.name !== undefined || store.listClaudeAccounts().length)) name = svc.checkAccountName(b.name);
+    const s = await needLogin().loginStart();
+    watchLogin(s.id, actorOf(c).label);
+    Object.assign(logins.get(s.id)!, { name, accountId });
+    return c.json({ id: s.id });
+  }));
   app.get('/api/claude/login/:id', run(async (c) => {
     admin(c);
     const st = await settleLogin(param(c, 'id'));
@@ -261,21 +298,72 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     return c.json({ ok: true });
   }));
   app.delete('/api/claude/login/:id', run(async (c) => { admin(c); const id = param(c, 'id'); clearInterval(logins.get(id)?.timer); logins.delete(id); await needLogin().loginCancel(id).catch(() => {}); return c.json({ ok: true }); }));
+  // accounts: the list never contains secrets
+  app.get('/api/claude/accounts', (c) => c.json(svc.listClaudeAccounts()));
+  app.post('/api/claude/accounts', run(async (c) => {
+    admin(c);
+    const b = await c.req.json().catch(() => ({}));
+    const id = svc.saveClaudeApiKey({ key: b.key, name: b.name }, actorOf(c).label);
+    return c.json({ id }, 201);
+  }));
+  app.put('/api/claude/accounts/:id/apikey', run(async (c) => {
+    admin(c);
+    const b = await c.req.json().catch(() => ({}));
+    svc.saveClaudeApiKey({ key: b.key, accountId: Number(param(c, 'id')) }, actorOf(c).label);
+    return c.json({ ok: true });
+  }));
+  app.patch('/api/claude/accounts/:id', run(async (c) => {
+    admin(c);
+    const b = await c.req.json().catch(() => ({}));
+    svc.updateClaudeAccount(Number(param(c, 'id')), { name: b.name, isDefault: b.isDefault === true }, actorOf(c).label);
+    return c.json(svc.listClaudeAccounts());
+  }));
+  app.delete('/api/claude/accounts/:id', run((c) => { admin(c); svc.deleteClaudeAccount(Number(param(c, 'id')), actorOf(c).label); return c.json({ ok: true }); }));
+  // older clients: disconnect Claude = remove every account
+  app.delete('/api/claude', run((c) => {
+    admin(c);
+    for (const a of store.listClaudeAccounts()) store.deleteClaudeAccount(a.id);
+    auth.audit(actorOf(c).label, 'claude_disconnected');
+    return c.json({ ok: true });
+  }));
+  // older clients: the API key of the default account
   app.put('/api/claude/apikey', run(async (c) => {
     admin(c);
     const b = await c.req.json().catch(() => ({}));
-    const key = String(b.key ?? '').trim();
-    if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(key)) throw new UserError('This does not look like an Anthropic API key (it starts with sk-ant-).');
-    store.setSecretSetting('anthropic_api_key', key);
-    store.setSecretSetting('claude_oauth_token', null);
-    auth.audit(actorOf(c).label, 'claude_connected', { kind: 'apikey' });
+    const def = store.getDefaultClaudeAccount();
+    svc.saveClaudeApiKey({ key: b.key, ...(def ? { accountId: def.id } : {}) }, actorOf(c).label);
     return c.json({ ok: true });
   }));
-  app.delete('/api/claude', run((c) => {
-    admin(c);
-    store.setSecretSetting('claude_oauth_token', null); store.setSecretSetting('anthropic_api_key', null); store.setSetting('claude_token_at', null);
-    auth.audit(actorOf(c).label, 'claude_disconnected');
-    return c.json({ ok: true });
+
+  // ---- logs of a task: sources, pages (history on demand, upwards) and a live stream
+  const logs = new TaskLogs(store, (t) => ctx.mgr.sandboxFor(t));
+  app.get('/api/tasks/:id/logs/sources', run(async (c) => c.json(logs.sources(taskOf(c)))));
+  app.get('/api/tasks/:id/logs', run(async (c) => {
+    const q = (k: string) => (c.req.query(k) !== undefined ? Number(c.req.query(k)) : undefined);
+    return c.json(await logs.page(taskOf(c), c.req.query('source') ?? 'dev', { before: q('before'), limit: q('limit') }));
+  }));
+  app.get('/api/tasks/:id/logs/stream', run(async (c) => {
+    const t = taskOf(c), key = c.req.query('source') ?? 'dev';
+    let cursor = Number(c.req.query('after') ?? 0);
+    return streamSSE(c, async (s) => {
+      let wake: (() => void) | null = null;
+      const onMsg = (m: StoreMessage) => { if (m.type === 'event' && m.event.taskId === t.id) wake?.(); };
+      store.bus.on('msg', onMsg);
+      s.onAbort(() => { store.bus.off('msg', onMsg); wake?.(); });
+      try {
+        await s.writeSSE({ event: 'ready', data: '{}' });
+        let idle = 0;
+        while (!s.aborted) {
+          const r = await logs.since(store.getTask(t.id) ?? t, key, cursor).catch(() => ({ lines: [], cursor }));
+          cursor = r.cursor;
+          if (r.lines.length) { idle = 0; await s.writeSSE({ event: 'lines', data: JSON.stringify({ lines: r.lines, cursor }) }); }
+          else if (++idle % 15 === 0) await s.write(': ping\n\n');
+          // events wake the loop at once; files and services are polled
+          await new Promise<void>((r2) => { wake = r2; setTimeout(r2, key === 'dev' || key.startsWith('svc:') ? 1000 : 5000); });
+          wake = null;
+        }
+      } finally { store.bus.off('msg', onMsg); }
+    });
   }));
 
   // ---- live updates (SSE). ?task=ID adds that task's events (replayed from ?after=ID / Last-Event-ID).

@@ -32,7 +32,7 @@ export function buildContext(o: BuildOpts): Ctx {
   // The manager needs the service for repo tokens, the service needs the manager: tie the knot lazily.
   const ref: { svc?: Service } = {};
   const mgr = new TaskManager(store, cfg, o.makeSandbox, (p, access) => ref.svc!.repoToken(p, access), o.fetchImpl);
-  const svc = new Service(store, cfg, mgr, auth, gh, previews);
+  const svc = new Service(store, cfg, mgr, auth, gh, previews, o.fetchImpl ?? fetch);
   ref.svc = svc;
   const updates = new Updates(store, cfg, mgr, auth, o.update ?? null, o.fetchImpl ?? fetch, o.now);
   svc.updates = updates;

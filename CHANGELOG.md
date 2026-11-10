@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0
+
+The dashboard is rebuilt, tasks can be created from it, logs are live, and Claude accounts are plural.
+
+### Added
+- **New design**: Tailwind v4 and shadcn/ui with the Tiesen theme. Black dark mode by default, light mode available (follows the system on first load, toggle in the header, choice remembered locally). Geist and Geist Mono are served by the dashboard itself, no third-party CDN. Every page was rebuilt with shadcn components (Card, Dialog, Command, Tabs, Sonner toasts, Skeleton loaders) and checked at 375 px in both modes; the old `styles.css` and home-made components are gone.
+- **Projects first**: the home page lists projects (one project = one GitHub repository) with running and failing tasks, open pull requests, last activity, the Claude account and a **New task** button. Project page at `/projects/<project>`, task page at `/projects/<project>/<task>`, with a breadcrumb.
+- **Create a task from the dashboard**: same parameters as the MCP `create_task` tool (prompt, and name, success command, budget… folded by default), through a REST route that calls the same service (tested to give the same result). The form reminds you that Claude or ChatGPT can do it too.
+- **Connect your chat** block on the home page until a chat client has connected, then a link.
+- **Repository picker**: searchable list (name and owner, keyboard), most recently pushed first, repositories already added are marked.
+- **Live log viewer** per task: sources (setup, dev server, each success check, services such as Postgres), streaming, auto-scroll that pauses when you scroll up with a **Back to live** button, ANSI colours, highlighted errors, optional timestamps, line wrap, search with highlighting, copy and download of the full log, older history loaded on demand, virtualised rendering.
+- **Several Claude accounts**: named accounts (subscription or API key) with connection date, expiry and state; add, rename, renew, delete; one default and an account per project (applied from the next agent session, no restart). The existing token becomes the account "Default". The task page shows the account used; expiry and usage-limit errors name the account. The MCP exposes the account name of each project, never a token.
+
+### Changed
+- **Settings** reorganised in sections: Claude, Projects (with default limits), Chat connection, Domain, Updates, Access and security (who can sign in, activity), Advanced (collapsed technical information: installation, MCP URL, GitHub App, OAuth allow-list, update source). Dangerous actions (remove a project, switch domain, remove a user) ask for confirmation in a dialog. Every setting shows "Saved" when stored. The former single long page, the "More settings" block and the separate GitHub block no longer exist as such: their content moved to Projects and Advanced.
+- The content security policy allows inline *styles* (needed by the UI components); scripts remain restricted to the server's own files.
+
+### Fixed
+- Dashboard fonts now load (the font families were declared under the wrong name).
+
 ## 0.3.1
 
 Fixes from the first manual test of 0.3.0 on a fresh server, plus tool versions and a way for the agent to stop.

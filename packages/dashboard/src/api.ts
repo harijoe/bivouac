@@ -1,13 +1,21 @@
 import type { Project, Task, TaskEvent, Usage } from '@bivouac/shared';
 
-export type ProjectWithTotals = Project & { totals: Usage & { tasks: number } };
+export type ProjectWithTotals = Project & {
+  totals: Usage & { tasks: number };
+  /** Name of the Claude account the project uses (never the token). */
+  claudeAccountName: string | null;
+  stats: { running: number; failed: number; withPr: number; lastActivityAt: string | null };
+};
 export type CostKind = 'estimated_api_equivalent' | 'cost';
 export type TaskView = Task & { costKind?: CostKind; dashboardUrl: string; pendingInstructions?: number; active?: boolean; shares?: Share[] };
 export interface Share { id: number; createdAt: number; expiresAt: number | null; revoked: boolean; active: boolean; url: string | null; urls?: { name: string; url: string }[] }
 export interface Session {
   user: { githubId: number; login: string; name: string | null; avatarUrl: string | null; role: 'admin' | 'user' } | null;
   version: string; domain: string; baseUrl: string; githubReady: boolean; setupOpen: boolean; mcpUrl: string;
+  /** A chat client (Claude, ChatGPT…) has connected at least once. */
+  mcpConnected: boolean;
 }
+export type { ClaudeAccount } from '@bivouac/shared';
 export type { Project, Task, TaskEvent, Usage };
 
 export class ApiError extends Error {

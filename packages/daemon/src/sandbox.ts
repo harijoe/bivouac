@@ -1,6 +1,6 @@
 import Dockerode from 'dockerode';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chownSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chownSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -17,6 +17,7 @@ export interface SandboxSpec {
   /** Sidecars to run next to the task. Services missing from this map are removed. */
   services?: Record<string, ServiceConfig>;
 }
+export interface TailWindow { text: string; start: number; end: number; size: number }
 export interface PrepareOpts { repoUrl: string; token: string | null; branch: string; base: string }
 export interface ExecOpts {
   cwd?: string;
@@ -36,6 +37,14 @@ export interface Sandbox {
   unpushed(): Promise<number>;
   /** Hash of the repository content (committed or not, ignored files excluded): changes whenever the code changes. */
   fingerprint(): Promise<string>;
+  /**
+   * A window of a text file below the workspace, cut on line boundaries: the lines that end at byte `before` (default: the
+   * end of the file), at most `bytes` bytes of them. `start`/`end` are byte offsets, so a caller can page upwards
+   * (`before = start`) or follow the file (`after`: only what was appended since that offset).
+   */
+  tail(rel: string, o?: { before?: number; after?: number; bytes?: number }): Promise<TailWindow>;
+  /** Recent output of a sidecar service (stdout and stderr, each line prefixed with its timestamp by Docker). */
+  serviceLogs(name: string, tail: number): Promise<string>;
   /** Files below the workspace (`repo/…`, `.bivouac/…`). Returns null when absent. */
   readFile(rel: string): Promise<string | null>;
   writeFile(rel: string, content: string): Promise<void>;
@@ -60,6 +69,32 @@ abstract class HostWorkspace {
   async readFile(rel: string) {
     const p = this.safe(rel);
     return existsSync(p) ? readFileSync(p, 'utf8') : null;
+  }
+  async tail(rel: string, o: { before?: number; after?: number; bytes?: number } = {}): Promise<TailWindow> {
+    const p = this.safe(rel);
+    if (!existsSync(p)) return { text: '', start: 0, end: 0, size: 0 };
+    const size = statSync(p).size;
+    const max = Math.min(Math.max(o.bytes ?? 65536, 1024), 1_000_000);
+    let start: number, end: number;
+    if (o.after !== undefined) { start = Math.min(o.after, size); end = Math.min(size, start + max); }
+    else { end = Math.min(o.before ?? size, size); start = Math.max(0, end - max); }
+    const buf = Buffer.alloc(end - start);
+    const fd = openSync(p, 'r');
+    try { readSync(fd, buf, 0, buf.length, start); } finally { closeSync(fd); }
+    let text = buf.toString('utf8');
+    // cut on line boundaries: drop a leading partial line when paging up (it belongs to the previous window), and a trailing
+    // partial line when following (it is delivered once complete)
+    if (o.after === undefined && start > 0) {
+      const nl = text.indexOf('\n');
+      if (nl < 0) { return { text: '', start: end, end, size }; }
+      start += Buffer.byteLength(text.slice(0, nl + 1)); text = text.slice(nl + 1);
+    }
+    if (end < size || o.after !== undefined) {
+      const nl = text.lastIndexOf('\n');
+      if (nl < 0) return { text: '', start, end: start, size };
+      end = start + Buffer.byteLength(text.slice(0, nl + 1)); text = text.slice(0, nl + 1);
+    }
+    return { text, start, end, size };
   }
   async writeFile(rel: string, content: string) {
     const p = this.safe(rel);
@@ -111,6 +146,18 @@ abstract class HostWorkspace {
       if (typeof process.getuid === 'function' && process.getuid() === 0) throw e;
     }
   }
+}
+
+/** Docker multiplexes stdout/stderr in 8-byte-headed frames when the container has no TTY. */
+export function demuxDockerLogs(buf: Buffer): string {
+  if (!Buffer.isBuffer(buf)) return String(buf ?? '');
+  let out = '', i = 0;
+  while (i + 8 <= buf.length && buf[i] <= 2 && buf[i + 1] === 0 && buf[i + 2] === 0 && buf[i + 3] === 0) {
+    const len = buf.readUInt32BE(i + 4);
+    out += buf.subarray(i + 8, i + 8 + len).toString('utf8');
+    i += 8 + len;
+  }
+  return i === 0 ? buf.toString('utf8') : out;
 }
 
 export const parseMemory = (m: string): number => {
@@ -268,6 +315,12 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
     return aborted ? 143 : 1;
   }
 
+  async serviceLogs(name: string, tail: number): Promise<string> {
+    if (!/^[a-z0-9-]{1,30}$/.test(name)) return '';
+    const c = this.docker.getContainer(this.svcName(name));
+    const buf = (await c.logs({ stdout: true, stderr: true, timestamps: true, tail: Math.min(Math.max(tail, 1), 20000) }).catch(() => Buffer.alloc(0))) as unknown as Buffer;
+    return demuxDockerLogs(buf);
+  }
   async isRunning() {
     try { return (await this.container!.inspect()).State.Running; } catch { return false; }
   }
@@ -318,6 +371,7 @@ export class LocalSandbox extends HostWorkspace implements Sandbox {
       p.on('close', (code, sig) => resolve(code ?? (sig ? 143 : 1)));
     });
   }
+  async serviceLogs() { return ''; }
   async isRunning() { return true; }
   async stop() { this.sup?.kill('SIGTERM'); this.sup = null; }
   async destroy() { await this.stop(); this.removeWorkspace(path.dirname(this.hostWs)); }

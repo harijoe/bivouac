@@ -3,23 +3,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { describe, expect, it } from 'vitest';
 import { addProject, makeEnv, makeRemote } from './helpers.js';
 
-export async function connect(env: ReturnType<typeof makeEnv>) {
-  const g = env.ctx.oauth.registerClient({ client_name: 'Claude', redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] });
-  const code = env.ctx.oauth.issueCode({ clientId: g.clientId, githubId: 42, redirectUri: 'https://claude.ai/api/mcp/auth_callback', codeChallenge: 'x'.repeat(43) });
-  // exchange the code directly through the DB-level API (PKCE is covered in oauth.test.ts)
-  env.store.db.prepare('UPDATE oauth_codes SET code_challenge = ?').run(require_s256('v'.repeat(50)));
-  const tokens = env.ctx.oauth.exchangeCode({ code, client_id: g.clientId, redirect_uri: 'https://claude.ai/api/mcp/auth_callback', code_verifier: 'v'.repeat(50) }).tokens;
-  const transport = new StreamableHTTPClientTransport(new URL('https://1-2-3-4.sslip.io/mcp'), {
-    fetch: (async (u: any, init: any) => env.app.request(String(u).replace('https://1-2-3-4.sslip.io', ''), init)) as typeof fetch,
-    requestInit: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
-  });
-  const client = new Client({ name: 'test', version: '1' });
-  await client.connect(transport);
-  return client;
-}
-import { createHash } from 'node:crypto';
-const require_s256 = (v: string) => createHash('sha256').update(v).digest('base64url');
-
+import { connect } from './mcp-client.js';
 const text = (r: any) => r.content[0].text as string;
 const json = (r: any) => JSON.parse(text(r));
 
@@ -98,9 +82,9 @@ describe('MCP server', () => {
     env.cfg.oauthToken = null;
     expect(await err({ project: 'demo', name: 'other', prompt: 'p' })).toMatch(/Claude is not connected.*https:\/\/1-2-3-4\.sslip\.io\/settings/);
     // expired token
-    env.store.setSecretSetting('claude_oauth_token', 'sk-ant-oat01-x'.padEnd(40, 'x'));
-    env.store.setSetting('claude_token_at', new Date(Date.now() - 400 * 86400_000).toISOString());
-    expect(await err({ project: 'demo', name: 'other', prompt: 'p' })).toMatch(/token has expired.*reconnect Claude/);
+    const acc = env.store.createClaudeAccount({ name: 'Perso', kind: 'oauth', secret: 'sk-ant-oat01-x'.padEnd(40, 'x') });
+    env.store.db.prepare('UPDATE claude_accounts SET connected_at=? WHERE id=?').run(new Date(Date.now() - 400 * 86400_000).toISOString(), acc);
+    expect(await err({ project: 'demo', name: 'other', prompt: 'p' })).toMatch(/token of the Claude account “Perso” has expired/);
     // PR on a project without GitHub
     expect(await err({ project: 'demo', task: 'same' }, 'open_pr')).toMatch(/not connected to GitHub/);
     await c.close();

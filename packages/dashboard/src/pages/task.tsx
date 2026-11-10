@@ -1,103 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ExternalLink, GitBranch, GitPullRequest, Info, Play, Send, Square } from 'lucide-react';
 import { isTerminal } from '@bivouac/shared';
-import { ago, api, ApiError, duration, fmtTok, fmtUsd, totalTokens, type Share, type TaskEvent, type TaskView } from '../api';
-import { Button, CopyField, Details, ErrorNote, Link, navigate, Spinner, StatusPill, statusHint, useAsync, useNow, useStream } from '../ui';
+import { ago, api, ApiError, duration, fmtTok, fmtUsd, totalTokens, type Share, type TaskEvent, type TaskView } from '@/api';
+import { AsyncButton } from '@/components/app/async-button';
+import { LogViewer } from '@/components/app/log-viewer';
+import { EmptyState, ErrorNote, Note, PageSkeleton, STATUS, StatusBadge } from '@/components/app/misc';
+import { TaskFeed } from '@/components/app/task-feed';
+import { TaskManage } from '@/components/app/task-manage';
+import { TaskShares } from '@/components/app/task-shares';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { useAsync, useNow, useStream } from '@/lib/hooks';
+import { Link } from '@/lib/router';
+import { isClaudeProblem, toItems } from '@/lib/task-items';
 
-const summarize = (i: any) => String(i?.command ?? i?.file_path ?? i?.pattern ?? i?.path ?? (i ? JSON.stringify(i) : '')).slice(0, 90);
+const TABS = ['activity', 'logs', 'sharing', 'settings'] as const;
+type Tab = (typeof TABS)[number];
+const tabFromHash = (): Tab => (TABS as readonly string[]).includes(location.hash.slice(1)) ? (location.hash.slice(1) as Tab) : 'activity';
 
-type Item =
-  | { kind: 'say'; id: number; text: string; thinking?: boolean }
-  | { kind: 'you'; id: number; text: string; queued?: boolean }
-  | { kind: 'tools'; id: number; calls: { name: string; input: any; result?: string; bad?: boolean }[] }
-  | { kind: 'check'; id: number; ok: boolean; command: string; output: string; exitCode: number }
-  | { kind: 'note'; id: number; text: string; bad?: boolean; href?: string };
-
-/** Turns the raw event stream into a short, readable feed: what was said, what was checked, and tool calls folded away. */
-function toItems(events: TaskEvent[]): Item[] {
-  const out: Item[] = [];
-  const pending = new Map<string, { name: string; input: any; result?: string; bad?: boolean }>();
-  const lastTools = () => { const l = out[out.length - 1]; return l?.kind === 'tools' ? l : null; };
-  for (const e of events) {
-    const d = e.data;
-    switch (e.kind) {
-      case 'assistant_text': if (String(d.text ?? '').trim()) out.push({ kind: 'say', id: e.id, text: d.text, thinking: d.thinking }); break;
-      case 'tool_use': {
-        const call = { name: d.name, input: d.input };
-        pending.set(d.id ?? String(e.id), call);
-        const g = lastTools();
-        if (g) g.calls.push(call); else out.push({ kind: 'tools', id: e.id, calls: [call] });
-        break;
-      }
-      case 'tool_result': { const c = pending.get(d.toolUseId ?? d.id); if (c) { c.result = String(d.text ?? ''); c.bad = !!d.isError; } break; }
-      case 'user_instruction': out.push({ kind: 'you', id: e.id, text: d.text, queued: d.queued }); break;
-      case 'check': out.push({ kind: 'check', id: e.id, ok: d.exitCode === 0, command: d.command, output: String(d.output ?? ''), exitCode: d.exitCode }); break;
-      case 'error': out.push({ kind: 'note', id: e.id, text: d.message, bad: true }); break;
-      case 'system':
-        if (d.subtype === 'push') out.push({ kind: 'note', id: e.id, text: `Branch ${d.branch} pushed to GitHub.` });
-        else if (d.subtype === 'pr') out.push({ kind: 'note', id: e.id, text: 'Pull request opened.', href: d.url });
-        else if (d.subtype === 'config_warning') out.push({ kind: 'note', id: e.id, text: d.message, bad: true });
-        break;
-      default: break;
-    }
-  }
-  return out;
-}
-
-function Feed({ items }: { items: Item[] }) {
-  if (!items.length) return <p className="muted">Nothing yet. The agent’s messages will appear here.</p>;
-  return (
-    <ol className="feed">
-      {items.map((it) => {
-        switch (it.kind) {
-          case 'say': return <li key={it.id} className={`say ${it.thinking ? 'dim' : ''}`}>{it.text}</li>;
-          case 'you': return <li key={it.id} className="you"><b>You</b> {it.text}{it.queued && <span className="muted"> · will be applied at the next attempt</span>}</li>;
-          case 'tools': return (
-            <li key={it.id} className="tools">
-              <details><summary>{it.calls.length === 1 ? `Used ${it.calls[0].name}` : `Used ${it.calls.length} tools`}</summary>
-                {it.calls.map((c, i) => (
-                  <details key={i} className={`call ${c.bad ? 'bad' : ''}`}><summary><b>{c.name}</b> <span className="muted clip">{summarize(c.input)}</span></summary>
-                    <pre>{JSON.stringify(c.input, null, 2)}</pre>{c.result && <pre>{c.result}</pre>}</details>
-                ))}
-              </details>
-            </li>
-          );
-          case 'check': return (
-            <li key={it.id} className={`check ${it.ok ? 'ok' : 'bad'}`}>
-              <details open={!it.ok}><summary>{it.ok ? 'Check passed' : `Check failed (code ${it.exitCode})`} <code className="clip">{it.command}</code></summary>{it.output.trim() && <pre>{it.output}</pre>}</details>
-            </li>
-          );
-          case 'note': return <li key={it.id} className={`note-line ${it.bad ? 'bad' : ''}`}>{it.text} {it.href && <a href={it.href} target="_blank" rel="noreferrer">Open</a>}</li>;
-        }
-      })}
-    </ol>
-  );
-}
-
-const DURATIONS = [['1h', '1 hour'], ['24h', '24 hours'], ['7d', '7 days'], ['never', 'No expiry']] as const;
-
-function Shares({ task, shares, reload }: { task: TaskView; shares: Share[]; reload: () => void }) {
-  const [dur, setDur] = useState<string>('24h');
-  const a = useAsync();
-  const active = shares.filter((s) => s.active);
-  return (
-    <div className="stack">
-      <p className="muted">Anyone with a link can view this preview, and only this preview, until it expires or you stop it.</p>
-      <div className="copy-row">
-        <select value={dur} onChange={(e) => setDur(e.target.value)} aria-label="Link duration">{DURATIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-        <Button variant="primary" busy={a.busy} busyLabel="Creating the link…" onClick={() => a.run(async () => { await api('POST', `/api/tasks/${task.id}/shares`, { duration: dur }); reload(); })}>Create a link</Button>
-      </div>
-      <ErrorNote>{a.error}</ErrorNote>
-      {active.length === 0 && <p className="muted">No active links.</p>}
-      {active.map((s) => (
-        <div key={s.id} className="share">
-          {(s.urls?.length ?? 0) > 1
-            ? s.urls!.map((u) => <CopyField key={u.name} value={u.url} label={`${u.name}${s.expiresAt ? ` · expires ${new Date(s.expiresAt * 1000).toLocaleString()}` : ' · no expiry'}`} />)
-            : <CopyField value={s.url ?? ''} label={s.expiresAt ? `Expires ${new Date(s.expiresAt * 1000).toLocaleString()}` : 'No expiry'} />}
-          <Button variant="ghost" busyLabel="Revoking…" onClick={() => a.run(async () => { await api('DELETE', `/api/tasks/${task.id}/shares/${s.id}`); reload(); })}>Revoke</Button>
-        </div>
-      ))}
-    </div>
-  );
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="grid gap-0.5 sm:grid-cols-[10rem_1fr] sm:gap-4"><dt className="text-muted-foreground">{label}</dt><dd className="min-w-0 break-words">{children}</dd></div>;
 }
 
 export function TaskPage({ project, name }: { project: string; name: string }) {
@@ -105,12 +30,15 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
   const [missing, setMissing] = useState(false);
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [shares, setShares] = useState<Share[]>([]);
-  const [devLog, setDevLog] = useState<string | null>(null);
   const [msg, setMsg] = useState('');
-  const [newName, setNewName] = useState('');
+  const [tab, setTabState] = useState<Tab>(tabFromHash);
   const seen = useRef(new Set<number>());
   const act = useAsync();
+  const send = useAsync();
   const id = task?.id;
+
+  const setTab = (t: string) => { setTabState(t as Tab); history.replaceState(null, '', `${location.pathname}${location.search}#${t}`); };
+  useEffect(() => { const f = () => setTabState(tabFromHash()); addEventListener('hashchange', f); return () => removeEventListener('hashchange', f); }, []);
 
   const reload = useCallback(async () => {
     try {
@@ -127,101 +55,122 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
   const active = !!task && !isTerminal(task.status);
   const now = useNow(active);
   const items = useMemo(() => toItems(events), [events]);
-  const feedEnd = useRef<HTMLDivElement>(null);
-  useEffect(() => { if (active) feedEnd.current?.scrollIntoView({ block: 'end' }); }, [items.length, active]);
 
-  if (missing) return <div className="empty"><p className="empty-title">This task does not exist (anymore)</p><p className="muted">It may have been renamed or deleted.</p><Link to="/" className="btn primary">Back to tasks</Link></div>;
-  if (!task) return <Spinner />;
+  if (missing) return <EmptyState title="This task does not exist (anymore)" action={<Button asChild><Link to={`/projects/${project}`}>Back to the project</Link></Button>}>It may have been renamed or deleted.</EmptyState>;
+  if (!task) return <PageSkeleton rows={3} />;
 
   const openPreview = (port?: string) => act.run(async () => {
-    const w = window.open('', '_blank');
+    const w = window.open('', '_blank'); // opened now so the browser does not block it after the request
     try { const r = await api('POST', `/api/tasks/${task.id}/preview-link`, port ? { port } : {}); if (w) w.location.href = r.url; else location.href = r.url; } catch (e) { w?.close(); throw e; }
   });
-  const post = (p: string, body?: unknown) => act.run(async () => { await api('POST', `/api/tasks/${task.id}/${p}`, body ?? {}); await reload(); });
-  const lastCheck = [...events].reverse().find((e) => e.kind === 'check');
-  const hint = statusHint(task.status);
-  const claudeProblem = task.error && /claude|token|credential|authenticat/i.test(task.error);
+  const post = (p: string) => act.run(async () => { await api('POST', `/api/tasks/${task.id}/${p}`, {}); await reload(); });
+  const waiting = task.status === 'blocked' || task.status === 'stuck';
+  const hint = STATUS[task.status].hint;
+  const isCost = task.costKind === 'cost';
+  const canResume = !active && task.status !== 'succeeded';
+
+  const submitMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = msg.trim();
+    if (!text) return;
+    // the box is emptied only once the daemon accepted the message
+    void send.run(async () => { await api('POST', `/api/tasks/${task.id}/instruct`, { text }); setMsg(''); await reload(); });
+  };
 
   return (
-    <>
-      <p className="crumb"><Link to="/">← All tasks</Link></p>
-      <header className="task-head">
-        <div><h1>{task.name}</h1><p className="muted">{task.projectName} · attempt {Math.max(1, task.iteration)} of {task.maxIterations} · {fmtUsd(task.usage.costUsd)} {task.costKind === 'cost' ? 'cost' : 'estimated API equivalent'} of {fmtUsd(task.maxCostUsd)} limit{task.startedAt ? ` · ${duration(task.startedAt, task.finishedAt, now)}` : ''}</p></div>
-        <StatusPill s={task.status} />
+    <div className="space-y-5">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-3"><h1 className="min-w-0 break-words text-2xl font-semibold tracking-tight">{task.name}</h1><StatusBadge status={task.status} /></div>
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+            <Link to={`/projects/${task.projectName}`} className="underline underline-offset-4 hover:text-foreground">{task.projectName}</Link>
+            <span aria-hidden="true">·</span><span>attempt {Math.max(1, task.iteration)} of {task.maxIterations}</span>
+            {task.startedAt && <><span aria-hidden="true">·</span><span>{duration(task.startedAt, task.finishedAt, now)}</span></>}
+            <span aria-hidden="true">·</span>
+            <span className="inline-flex items-center gap-1">
+              {fmtUsd(task.usage.costUsd)} {isCost ? 'cost' : 'estimated API equivalent'} of {fmtUsd(task.maxCostUsd)} limit
+              {!isCost && (
+                <Tooltip>
+                  <TooltipTrigger asChild><button type="button" aria-label="What is the estimated API equivalent?" className="inline-flex size-6 items-center justify-center rounded-full hover:text-foreground"><Info className="size-3.5" /></button></TooltipTrigger>
+                  <TooltipContent className="max-w-64">Not money spent: with a Claude subscription this is what the same usage would cost on the API. The limit is a safeguard on consumption.</TooltipContent>
+                </Tooltip>
+              )}
+            </span>
+            {task.accountName && <><span aria-hidden="true">·</span><span>Claude account: {task.accountName}</span></>}
+          </p>
+        </div>
       </header>
 
-      <div className="actions">
-        {task.devPort && <Button variant="primary" onClick={() => openPreview()} busyLabel="Opening…">Open preview ↗</Button>}
-        {task.ports.filter((p) => !p.primary).map((p) => <Button key={p.name} onClick={() => openPreview(p.name)} busyLabel="Opening…">Open {p.name} ↗</Button>)}
-        {active ? <Button variant="danger" busyLabel="Stopping…" onClick={() => post('stop')}>Stop</Button> : task.status !== 'succeeded' && <Button busyLabel="Resuming…" onClick={() => post('resume')}>Resume</Button>}
+      <div className="flex flex-wrap gap-2">
+        {task.devPort && <AsyncButton className="h-11 sm:h-9" busyLabel="Opening…" onClick={() => openPreview()}><ExternalLink />Open preview</AsyncButton>}
+        {task.ports.filter((p) => !p.primary).map((p) => <AsyncButton key={p.name} variant="outline" className="h-11 sm:h-9" busyLabel="Opening…" onClick={() => openPreview(p.name)}><ExternalLink />Open {p.name}</AsyncButton>)}
+        {active
+          ? <AsyncButton variant="outline" className="h-11 sm:h-9" busyLabel="Stopping…" onClick={() => post('stop')}><Square />Stop</AsyncButton>
+          : canResume && <AsyncButton variant={waiting ? 'default' : 'outline'} className="h-11 sm:h-9" busyLabel="Resuming…" onClick={() => post('resume')}><Play />Resume</AsyncButton>}
+        <AsyncButton variant="outline" className="h-11 sm:h-9" busyLabel="Pushing the branch…" onClick={() => post('push')}><GitBranch />{task.pushed ? 'Push again' : 'Push branch'}</AsyncButton>
+        {task.prUrl
+          ? <Button asChild variant="outline" className="h-11 sm:h-9"><a href={task.prUrl} target="_blank" rel="noreferrer"><GitPullRequest />View pull request</a></Button>
+          : <AsyncButton variant="outline" className="h-11 sm:h-9" busyLabel="Opening the pull request…" onClick={() => post('pr')}><GitPullRequest />Open pull request</AsyncButton>}
       </div>
       <ErrorNote>{act.error}</ErrorNote>
-      {hint && (!task.error || task.status === 'blocked' || task.status === 'stuck') && <p className="note">{hint}</p>}
-      {task.error && (task.status === 'blocked' || task.status === 'stuck') && (
-        <div className="note warn" role="status">
-          <b>{task.status === 'blocked' ? 'The agent is waiting for you:' : 'The agent was stopped because it was stuck:'}</b>
-          <pre className="reason">{task.error}</pre>
-          <p className="muted">Answer in the message box below{task.status === 'blocked' ? '' : ' with a new direction'}, then press Resume. Nothing is retried automatically.</p>
-        </div>
-      )}
-      {task.error && task.status !== 'blocked' && task.status !== 'stuck' && (
-        <p className="note error" role="alert">
-          {claudeProblem ? <>Your Claude connection has a problem: {task.error} <Link to="/settings#claude">Reconnect Claude</Link></> : task.error}
-        </p>
-      )}
-      {task.configError && <p className="note warn" role="alert">The <code>bivouac.yml</code> in this branch has a problem, so the previous settings are still used: {task.configError}</p>}
-      {task.prUrl && <p className="note ok"><a href={task.prUrl} target="_blank" rel="noreferrer">View the pull request ↗</a></p>}
 
-      <section className="card">
-        <h2>Progress</h2>
-        <Feed items={items} />
-        <div ref={feedEnd} />
-        <form className="copy-row" onSubmit={(e) => { e.preventDefault(); const text = msg.trim(); if (!text) return; setMsg(''); void act.run(async () => { await api('POST', `/api/tasks/${task.id}/instruct`, { text }); await reload(); }); }}>
-          <input placeholder={active ? 'Tell the agent something…' : 'Tell the agent something (it will resume)…'} value={msg} onChange={(e) => setMsg(e.target.value)} aria-label="Instruction" />
-          <Button disabled={!msg.trim()} busyLabel="Sending…" busy={act.busy}>Send</Button>
-        </form>
-        {(task.pendingInstructions ?? 0) > 0 && <p className="muted">{task.pendingInstructions} message(s) waiting for the next attempt.</p>}
-      </section>
+      {waiting && task.error ? (
+        <Note tone="warn" title={task.status === 'blocked' ? 'The agent is waiting for you' : 'The agent was stopped because it was stuck'}>
+          <pre className="my-2 max-h-60 overflow-auto rounded-md bg-background/60 p-3 font-mono text-xs whitespace-pre-wrap break-words text-foreground">{task.error}</pre>
+          {task.status === 'blocked' ? 'Answer in the message box below, then press Resume.' : 'The same check failed twice with no change to the code. Give it a new direction in the message box below, then press Resume.'} Nothing is retried automatically.
+        </Note>
+      ) : (
+        <>
+          {hint && !task.error && <Note>{hint}</Note>}
+          {task.error && (
+            <Note tone="error" title={isClaudeProblem(task.error) ? 'Your Claude connection has a problem' : undefined}>
+              {task.error}{' '}
+              {isClaudeProblem(task.error) && <Link to="/settings/claude" className="font-medium underline underline-offset-4">Reconnect</Link>}
+              {hint && <span className="mt-1 block">{hint}</span>}
+            </Note>
+          )}
+        </>
+      )}
+      {task.configError && <Note tone="warn">The <code className="font-mono">bivouac.yml</code> in this branch has a problem, so the previous settings are still used: {task.configError}</Note>}
 
-      <Details title="Share the preview" badge={shares.some((s) => s.active) ? <span className="count">{shares.filter((s) => s.active).length}</span> : null}>
-        <Shares task={task} shares={shares} reload={reload} />
-      </Details>
-      {lastCheck && <Details title="Last check" open={lastCheck.data.exitCode !== 0} badge={<span className={`count ${lastCheck.data.exitCode === 0 ? 'ok' : 'bad'}`}>{lastCheck.data.exitCode === 0 ? 'passed' : 'failed'}</span>}><p className="muted"><code>{lastCheck.data.command}</code></p><pre>{lastCheck.data.output}</pre></Details>}
-      <Details title="Details">
-        <dl className="facts">
-          <dt>Branch</dt><dd><code>{task.branch}</code></dd>
-          <dt>Started from</dt><dd><code>{task.baseBranch}</code></dd>
-          <dt>Success command</dt><dd><code>{task.successCommand}</code></dd>
-          <dt>Tokens</dt><dd>{fmtTok(totalTokens(task.usage))}</dd>
-          <dt>Created</dt><dd>{ago(task.createdAt, now)}</dd>
-          <dt>{task.ports.length > 1 ? 'Addresses' : 'Preview address'}</dt>
-          <dd className="clip">{task.ports.length > 1 ? task.ports.map((p) => <div key={p.name}><b>{p.name}</b> <span className="muted">(port {p.port})</span><br />{p.url}</div>) : task.previewUrl}</dd>
-          {task.services.length > 0 && <><dt>Services</dt><dd>{task.services.map((x) => <div key={x.name}><b>{x.name}</b> <span className="muted">{x.image}</span></div>)}</dd></>}
-        </dl>
-        <div className="actions">
-          <Button busyLabel="Pushing the branch…" onClick={() => post('push')}>{task.pushed ? 'Push again' : 'Push branch to GitHub'}</Button>
-          <Button busyLabel="Opening the pull request…" onClick={() => act.run(async () => { await api('POST', `/api/tasks/${task.id}/pr`); await reload(); })}>Open a pull request</Button>
+      <form className="space-y-2 rounded-lg border p-4" onSubmit={submitMessage}>
+        <Label htmlFor="instruction">Send a message to the agent</Label>
+        <Textarea id="instruction" rows={2} value={msg} onChange={(e) => setMsg(e.target.value)} placeholder={active ? 'Tell the agent something…' : 'Tell the agent something (the task resumes)…'}
+          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) e.currentTarget.form?.requestSubmit(); }} />
+        <ErrorNote>{send.error}</ErrorNote>
+        <div className="flex flex-wrap items-center gap-3">
+          <AsyncButton type="submit" className="h-11 sm:h-9" disabled={!msg.trim()} busy={send.busy} busyLabel="Sending…"><Send />Send</AsyncButton>
+          {(task.pendingInstructions ?? 0) > 0 && <span className="text-sm text-muted-foreground">{task.pendingInstructions} message(s) waiting for the next attempt.</span>}
         </div>
-      </Details>
-      <Details title="Dev server logs">
-        <Button variant="secondary" busyLabel="Loading the logs…" onClick={() => act.run(async () => setDevLog((await api('GET', `/api/tasks/${task.id}/devlogs?lines=300`)).text || 'No output yet.'))}>{devLog === null ? 'Show logs' : 'Refresh'}</Button>
-        {devLog !== null && <pre>{devLog}</pre>}
-      </Details>
-      <Details title="Manage">
-        <form className="stack" onSubmit={(e) => { e.preventDefault(); void act.run(async () => { const t = await api<TaskView>('POST', `/api/tasks/${task.id}/rename`, { name: newName }); navigate(`/projects/${t.projectName}/${t.name}`, true); }); }}>
-          <label>Rename<input value={newName} placeholder={task.name} onChange={(e) => setNewName(e.target.value.toLowerCase())} pattern="[a-z0-9]([a-z0-9\-]{0,38}[a-z0-9])?" /></label>
-          <p className="muted">The preview address changes immediately and existing share links stop working. The git branch keeps its name.</p>
-          <Button disabled={!newName || newName === task.name} busy={act.busy} busyLabel="Renaming…">Rename</Button>
-        </form>
-        {(
-          <Button variant="danger" busyLabel="Deleting…" onClick={() => act.run(async () => {
-            try { await api('DELETE', `/api/tasks/${task.id}`); } catch (x) {
-              if (x instanceof ApiError && x.body.code === 'UNPUSHED') { if (!confirm(`${x.message}. Delete anyway and lose this work?`)) return; await api('DELETE', `/api/tasks/${task.id}?force=1`); } else throw x;
-            }
-            navigate('/');
-          })}>Delete this task</Button>
-        )}
-      </Details>
-    </>
+      </form>
+
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="h-auto w-full justify-start overflow-x-auto sm:w-fit">
+          <TabsTrigger value="activity" className="h-10 sm:h-8">Activity</TabsTrigger>
+          <TabsTrigger value="logs" className="h-10 sm:h-8">Logs</TabsTrigger>
+          <TabsTrigger value="sharing" className="h-10 sm:h-8">Preview &amp; sharing{shares.some((s) => s.active) && ` (${shares.filter((s) => s.active).length})`}</TabsTrigger>
+          <TabsTrigger value="settings" className="h-10 sm:h-8">Settings</TabsTrigger>
+        </TabsList>
+        <TabsContent value="activity" className="pt-3"><TaskFeed items={items} follow={active} /></TabsContent>
+        <TabsContent value="logs" className="pt-3"><LogViewer taskId={task.id} live={active} status={task.status} /></TabsContent>
+        <TabsContent value="sharing" className="space-y-4 pt-3"><TaskShares task={task} shares={shares} reload={reload} /></TabsContent>
+        <TabsContent value="settings" className="space-y-8 pt-3">
+          <dl className="space-y-2 text-sm">
+            <Fact label="Branch"><code className="font-mono">{task.branch}</code></Fact>
+            <Fact label="Started from"><code className="font-mono">{task.baseBranch}</code></Fact>
+            <Fact label="Success command"><code className="font-mono">{task.successCommand}</code></Fact>
+            <Fact label="Tokens">{fmtTok(totalTokens(task.usage))}</Fact>
+            <Fact label="Created">{ago(task.createdAt, now)}</Fact>
+            <Fact label={task.ports.length > 1 ? 'Addresses' : 'Preview address'}>
+              {task.ports.length > 1
+                ? task.ports.map((p) => <div key={p.name}><b>{p.name}</b> <span className="text-muted-foreground">(port {p.port})</span><br /><span className="break-all">{p.url}</span></div>)
+                : <span className="break-all">{task.previewUrl}</span>}
+            </Fact>
+            {task.services.length > 0 && <Fact label="Services">{task.services.map((x) => <div key={x.name}><b>{x.name}</b> <span className="text-muted-foreground">{x.image}</span></div>)}</Fact>}
+          </dl>
+          <TaskManage task={task} />
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 }

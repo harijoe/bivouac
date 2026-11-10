@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { gitignoreMatcher, isSecretPath, redactSecrets, summarizeTree, truncateSmart, SNAPSHOT_CHARS } from '../src/projectcontext.js';
-import { connect } from './mcp.test.js';
+import { connect } from './mcp-client.js';
 import { addProject, makeEnv, makeRemote } from './helpers.js';
 
 const GHP = 'ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
