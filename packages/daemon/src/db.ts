@@ -274,8 +274,8 @@ export class Store {
     this.addEvent(id, 'status', { status, error: error ?? null });
     return this.emitTask(id)!;
   }
-  patchTask(id: number, p: Partial<{ devPort: number; liveConfig: LiveConfig; iteration: number; sessionId: string; pushed: boolean; prUrl: string; maxIterations: number; maxCostUsd: number; maxTokens: number | null; error: string | null; accountName: string }>) {
-    const m: Record<string, string> = { liveConfig: 'live_config', devPort: 'dev_port', iteration: 'iteration', sessionId: 'session_id', pushed: 'pushed', prUrl: 'pr_url', maxIterations: 'max_iterations', maxCostUsd: 'max_cost_usd', maxTokens: 'max_tokens', error: 'error', accountName: 'account_name' };
+  patchTask(id: number, p: Partial<{ devPort: number; liveConfig: LiveConfig; iteration: number; sessionId: string; pushed: boolean; prUrl: string; maxIterations: number; maxCostUsd: number; maxTokens: number | null; successCommand: string; error: string | null; accountName: string }>) {
+    const m: Record<string, string> = { liveConfig: 'live_config', devPort: 'dev_port', iteration: 'iteration', sessionId: 'session_id', pushed: 'pushed', prUrl: 'pr_url', maxIterations: 'max_iterations', maxCostUsd: 'max_cost_usd', maxTokens: 'max_tokens', successCommand: 'success_command', error: 'error', accountName: 'account_name' };
     for (const [k, v] of Object.entries(p)) {
       if (v === undefined) continue;
       this.db.prepare(`UPDATE tasks SET ${m[k]}=? WHERE id=?`).run(typeof v === 'boolean' ? (v ? 1 : 0) : typeof v === 'object' && v !== null ? JSON.stringify(v) : v, id);

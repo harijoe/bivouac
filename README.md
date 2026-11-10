@@ -105,7 +105,7 @@ services:                      # sidecars: one instance per task
     image: postgres:16
     env: { POSTGRES_PASSWORD: dev }
     volume: /var/lib/postgresql/data
-    memory: 512m               # default 512m, 1 CPU
+    memory: 2g                 # default 1g, 1 CPU (a database with real data needs room: a service over its limit is killed and reported)
 success: pnpm test && pnpm build
 limits: { cpus: 2, memory: 4g }
 budget: { max_iterations: 10, max_cost_usd: 20 }
@@ -129,7 +129,7 @@ Each port in `ports` gets its own address. The **first** one keeps the usual `ht
 
 ### Services (Postgres, Redis, …)
 
-Every task gets **its own instance** of each service, started before the task's setup, on the task's private network, and removed with the task (volume included). Reach it by its name: `postgres:5432`, `redis:6379` — never `localhost`, and never through a port of the server. Services have CPU and memory limits (1 CPU and 512 MB unless you set `cpus` / `memory`); at most 5 per project. The agent is told which services exist and how to reach them.
+Every task gets **its own instance** of each service, started before the task's setup, on the task's private network, and removed with the task (volume included). Reach it by its name: `postgres:5432`, `redis:6379` — never `localhost`, and never through a port of the server. Services have CPU and memory limits (1 CPU and 1 GB unless you set `cpus` / `memory`); at most 5 per project. A service killed for lack of memory is reported in the task history and in its log (with the limit) and started again. The agent is told which services exist and how to reach them.
 
 ### The agent can change both
 

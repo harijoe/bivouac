@@ -31,11 +31,14 @@ export function pushFailureMessage(raw: string): string {
   return `Push failed: ${msg}`;
 }
 
+/** Limits an owner (or an assistant) can change on an existing task. */
+export interface TaskLimits { maxCostUsd?: number | null; maxIterations?: number | null; maxTokens?: number | null; successCommand?: string | null }
+
 export interface Actor { kind: 'user' | 'mcp' | 'system'; label: string }
 
 export interface TaskSummary {
   id: number; name: string; project: string; title: string; status: string; iteration: number; maxIterations: number;
-  costUsd: number; /** 'estimated_api_equivalent' with a subscription (not a spend), 'cost' with an API key. */ costKind: 'estimated_api_equivalent' | 'cost'; maxCostUsd: number; tokens: number; previewUrl: string | null; dashboardUrl: string; prUrl: string | null; pushed: boolean;
+  costUsd: number; /** 'estimated_api_equivalent' with a subscription (not a spend), 'cost' with an API key. */ costKind: 'estimated_api_equivalent' | 'cost'; maxCostUsd: number; maxTokens: number | null; successCommand: string; tokens: number; previewUrl: string | null; dashboardUrl: string; prUrl: string | null; pushed: boolean;
   branch: string; error: string | null; createdAt: string; finishedAt: string | null;
   /** Every exposed port with its URL (the main one first). */
   urls: { name: string; port: number; main: boolean; url: string }[];
@@ -209,7 +212,7 @@ export class Service {
   summary(t: Task): TaskSummary {
     return {
       id: t.id, name: t.name, project: t.projectName, title: t.title, status: t.status, iteration: t.iteration, maxIterations: t.maxIterations,
-      costUsd: t.usage.costUsd, costKind: this.costKind(t.projectId), maxCostUsd: t.maxCostUsd, tokens: t.usage.inputTokens + t.usage.outputTokens + t.usage.cacheCreationTokens,
+      costUsd: t.usage.costUsd, costKind: this.costKind(t.projectId), maxCostUsd: t.maxCostUsd, maxTokens: t.maxTokens, successCommand: t.successCommand, tokens: t.usage.inputTokens + t.usage.outputTokens + t.usage.cacheCreationTokens,
       previewUrl: t.previewUrl, dashboardUrl: this.taskUrl(t), prUrl: t.prUrl, pushed: t.pushed, branch: t.branch, error: t.error, createdAt: t.createdAt, finishedAt: t.finishedAt,
       urls: t.ports.map((p) => ({ name: p.name, port: p.port, main: p.primary, url: p.url })), services: t.services, configError: t.configError,
     };
@@ -285,9 +288,69 @@ export class Service {
     this.auth.audit(actor.label, 'task_stopped', { task: t.name, project: t.projectName });
     return this.store.getTask(t.id)!;
   }
-  async resumeTask(t: Task, actor: Actor, text?: string) {
+  /** Validates the limits given by a person or an assistant; undefined/null/'' means “leave as is”. */
+  private parseLimits(o: TaskLimits): { maxCostUsd?: number; maxIterations?: number; maxTokens?: number; successCommand?: string } {
+    const out: { maxCostUsd?: number; maxIterations?: number; maxTokens?: number; successCommand?: string } = {};
+    const given = (v: unknown) => v !== undefined && v !== null && v !== '';
+    if (given(o.maxCostUsd)) {
+      const n = Number(o.maxCostUsd);
+      if (!Number.isFinite(n) || n <= 0 || n > 100000) throw new UserError('The cost limit must be a positive number of dollars, for example 30.', 'invalid');
+      out.maxCostUsd = Math.round(n * 100) / 100;
+    }
+    if (given(o.maxIterations)) {
+      const n = Number(o.maxIterations);
+      if (!Number.isInteger(n) || n < 1 || n > 1000) throw new UserError('The attempt limit must be a whole number between 1 and 1000.', 'invalid');
+      out.maxIterations = n;
+    }
+    if (given(o.maxTokens)) {
+      const n = Number(o.maxTokens);
+      if (!Number.isInteger(n) || n < 1) throw new UserError('The token limit must be a positive whole number.', 'invalid');
+      out.maxTokens = n;
+    }
+    if (given(o.successCommand)) {
+      const c = String(o.successCommand).trim();
+      if (!c) throw new UserError('The success command cannot be empty. It must exit with 0 when the work is done, for example "pnpm test && pnpm build".', 'invalid');
+      if (c.length > 4000) throw new UserError('The success command is too long (4000 characters at most). Put the logic in a script of the repository.', 'invalid');
+      out.successCommand = c;
+    }
+    return out;
+  }
+  /** Why a task cannot continue with these limits, or null. */
+  private exhausted(t: Task, l: { maxCostUsd?: number; maxTokens?: number }): string | null {
+    const cost = t.usage.costUsd, maxCost = l.maxCostUsd ?? t.maxCostUsd, kind = this.costKind(t.projectId) === 'cost' ? 'cost' : 'estimated API equivalent';
+    if (maxCost - cost <= 0.0001) {
+      return `This task has used its whole budget: $${cost.toFixed(2)} ${kind} of the $${maxCost.toFixed(2)} limit. Raise the limit to continue it, for example to $${(Math.ceil((cost * 1.5) / 5) * 5 || 5).toFixed(0)}: pass max_cost_usd to resume_task (or use update_task), or change “Budget” on the task page.`;
+    }
+    const tok = t.usage.inputTokens + t.usage.outputTokens + t.usage.cacheCreationTokens, maxTok = l.maxTokens ?? t.maxTokens;
+    if (maxTok && tok >= maxTok) return `This task has used its whole token limit (${tok} of ${maxTok}). Raise max_tokens to continue it (resume_task or update_task).`;
+    return null;
+  }
+  /** Changes the limits of an existing task. They apply from the next attempt (an attempt already running keeps its cap). */
+  updateTaskLimits(t: Task, o: TaskLimits, actor: Actor): Task {
+    const l = this.parseLimits(o);
+    if (!Object.keys(l).length) throw new UserError('Nothing to change: give at least one of max_cost_usd, max_iterations, max_tokens or success_command.', 'invalid');
+    return this.applyLimits(t, l, actor);
+  }
+  private applyLimits(t: Task, l: ReturnType<Service['parseLimits']>, actor: Actor): Task {
+    const changes: { field: string; from: unknown; to: unknown }[] = [];
+    const cur: Record<string, unknown> = { maxCostUsd: t.maxCostUsd, maxIterations: t.maxIterations, maxTokens: t.maxTokens, successCommand: t.successCommand };
+    for (const [k, v] of Object.entries(l)) if (cur[k] !== v) changes.push({ field: k, from: cur[k], to: v });
+    if (!changes.length) return t;
+    this.store.patchTask(t.id, l);
+    const label = { maxCostUsd: 'Budget', maxIterations: 'Attempt limit', maxTokens: 'Token limit', successCommand: 'Success command' } as Record<string, string>;
+    const show = (f: string, v: unknown) => (f === 'maxCostUsd' ? `$${Number(v).toFixed(2)}` : v === null ? 'none' : String(v));
+    this.store.addEvent(t.id, 'system', { subtype: 'limits_changed', by: actor.label, changes, message: `${changes.map((c) => `${label[c.field]}: ${show(c.field, c.from)} → ${show(c.field, c.to)}`).join('; ')}. Applies from the next attempt.` });
+    this.auth.audit(actor.label, 'task_limits_updated', { task: t.name, project: t.projectName, changes: changes.map((c) => c.field) });
+    return this.store.getTask(t.id)!;
+  }
+  async resumeTask(t: Task, actor: Actor, text?: string, limits: TaskLimits = {}) {
     this.assertAccepting();
     this.assertClaude(t.projectId);
+    const l = this.parseLimits(limits);
+    // a task that stopped on its budget cannot do anything with a plain resume: say so, with the way out
+    const why = this.exhausted(t, l);
+    if (why && (t.status === 'budget_exceeded' || l.maxCostUsd !== undefined || l.maxTokens !== undefined)) throw new UserError(why, 'budget_exhausted', 409);
+    if (Object.keys(l).length) t = this.applyLimits(t, l, actor);
     await this.mgr.resume(t.id, text);
     this.auth.audit(actor.label, 'task_resumed', { task: t.name, project: t.projectName });
     return this.store.getTask(t.id)!;

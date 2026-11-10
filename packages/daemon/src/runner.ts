@@ -75,14 +75,27 @@ export class TaskManager {
     await a.sandbox.stop();
   }
 
+  /**
+   * Continues a task. When it has used all its attempts and the caller did not raise the limit, it gets a fresh allowance
+   * (the configured number of attempts on top of those already made); otherwise the limit set by the owner stays.
+   */
+  /**
+   * Continues a task. When it has used all its attempts and the caller did not raise the limit, it gets a fresh allowance
+   * (the configured number of attempts on top of those already made); otherwise the limit set by the owner stays.
+   */
   async resume(id: number, instruction?: string) {
     const t = this.store.getTask(id);
     if (!t) throw new Error('no such task');
     if (this.active.has(id) || t.status === 'queued') throw new Error(`task is ${t.status}`);
     if (instruction) this.store.addInstruction(id, instruction);
-    const project = this.store.getProject(t.projectId)!;
-    const eff = mergeConfig(await this.readRepoConfig(t), project.config);
-    this.store.patchTask(id, { maxIterations: t.iteration + (eff.budget?.max_iterations ?? 10), error: null });
+    let maxIterations = t.maxIterations;
+    if (t.iteration >= t.maxIterations) {
+      const project = this.store.getProject(t.projectId)!;
+      const eff = mergeConfig(await this.readRepoConfig(t), project.config);
+      maxIterations = t.iteration + (eff.budget?.max_iterations ?? 10);
+      this.store.addEvent(id, 'system', { subtype: 'limits_changed', by: 'bivouac', changes: [{ field: 'maxIterations', from: t.maxIterations, to: maxIterations }], message: `Attempt limit raised from ${t.maxIterations} to ${maxIterations} to continue.` });
+    }
+    this.store.patchTask(id, { maxIterations, error: null });
     this.enqueue(id);
   }
 
@@ -249,7 +262,6 @@ export class TaskManager {
     const dev = eff.dev!;
 
     // 4. agent loop
-    const successCmd = task.successCommand;
     let failure: { output: string; exitCode: number } | null = null;
     let lastCheck: { output: string; fingerprint: string } | null = null;
     for (;;) {
@@ -258,6 +270,8 @@ export class TaskManager {
       const remaining = task.maxCostUsd - task.usage.costUsd;
       if (remaining <= 0.0001 || (task.maxTokens && tokensOf(task.usage) >= task.maxTokens)) return void this.store.setStatus(id, 'budget_exceeded');
       const iteration = task.iteration + 1;
+      // limits and success command can be changed while the task exists: read at the start of every attempt
+      const successCmd = task.successCommand;
       this.store.patchTask(id, { iteration });
       // the agent may have edited bivouac.yml: new ports and services take effect now
       eff = await this.loadConfig(task, project, sb, true);

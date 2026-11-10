@@ -130,7 +130,7 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   app.post('/api/tasks/:id/stop', run(async (c) => c.json(view(await svc.stopTask(taskOf(c), actorOf(c))))));
   app.post('/api/tasks/:id/resume', run(async (c) => {
     const b = await c.req.json().catch(() => ({}));
-    return c.json(view(await svc.resumeTask(taskOf(c), actorOf(c), b.text)));
+    return c.json(view(await svc.resumeTask(taskOf(c), actorOf(c), b.text, { maxCostUsd: b.maxCostUsd, maxIterations: b.maxIterations, maxTokens: b.maxTokens, successCommand: b.successCommand })));
   }));
   app.post('/api/tasks/:id/instruct', run(async (c) => {
     const b = await c.req.json().catch(() => ({}));
@@ -143,8 +143,7 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   app.patch('/api/tasks/:id', run(async (c) => {
     const t = taskOf(c);
     const b = await c.req.json().catch(() => ({}));
-    store.patchTask(t.id, { maxCostUsd: b.maxCostUsd, maxIterations: b.maxIterations, maxTokens: b.maxTokens });
-    return c.json(view(store.getTask(t.id)!));
+    return c.json(view(svc.updateTaskLimits(t, { maxCostUsd: b.maxCostUsd, maxIterations: b.maxIterations, maxTokens: b.maxTokens, successCommand: b.successCommand }, actorOf(c))));
   }));
   app.post('/api/tasks/:id/push', run(async (c) => c.json(view(await svc.pushBranch(taskOf(c), actorOf(c))))));
   app.post('/api/tasks/:id/pr', run(async (c) => c.json({ url: await svc.openPr(taskOf(c), actorOf(c)) })));

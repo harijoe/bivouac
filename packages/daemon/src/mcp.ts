@@ -12,6 +12,12 @@ const EXTERNAL: Ann = { readOnlyHint: false, destructiveHint: false, idempotentH
 const ok = (obj: unknown) => ({ content: [{ type: 'text' as const, text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] });
 const fail = (text: string) => ({ isError: true, content: [{ type: 'text' as const, text }] });
 
+const LIMIT_PARAMS = {
+  max_cost_usd: z.number().positive().optional().describe('New total budget in USD for the whole task (not an increment).'),
+  max_iterations: z.number().int().positive().optional().describe('New total number of attempts allowed for the whole task.'),
+  max_tokens: z.number().int().positive().optional().describe('New total token limit.'),
+  success_command: z.string().optional().describe('New success command (must exit 0 when the work is done).'),
+};
 const PROJECT = z.string().describe('Project name (see list_projects), for example "my-app".');
 const TASK = z.string().describe('Task name, unique inside the project, for example "login-page".');
 
@@ -73,9 +79,13 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
     { project: PROJECT, task: TASK },
     async (a) => svc.summary(await svc.stopTask(svc.resolveTask(a.project, a.task), actor)));
 
-  tool('resume_task', 'Resume a task', 'Continue a stopped or finished task (failed, budget_exceeded, max_iterations, stopped, blocked, stuck) with a fresh iteration allowance. Optionally add an instruction.', WRITE,
-    { project: PROJECT, task: TASK, text: z.string().optional().describe('Optional instruction to give when resuming.') },
-    async (a) => svc.summary(await svc.resumeTask(svc.resolveTask(a.project, a.task), actor, a.text)));
+  tool('resume_task', 'Resume a task', 'Continue a stopped or finished task (failed, budget_exceeded, max_iterations, stopped, blocked, stuck). Optionally add an instruction. A task stopped on max_iterations gets a fresh allowance of attempts unless you pass max_iterations; a task stopped on budget_exceeded cannot continue unless you also pass a higher max_cost_usd (a total, not an increment): the call fails with an explanation otherwise. The other limits can be changed at the same time.', WRITE,
+    { project: PROJECT, task: TASK, text: z.string().optional().describe('Optional instruction to give when resuming.'), ...LIMIT_PARAMS },
+    async (a) => svc.summary(await svc.resumeTask(svc.resolveTask(a.project, a.task), actor, a.text, { maxCostUsd: a.max_cost_usd, maxIterations: a.max_iterations, maxTokens: a.max_tokens, successCommand: a.success_command })));
+
+  tool('update_task', 'Change the limits of a task', 'Change the budget (max_cost_usd), the maximum number of attempts (max_iterations), the token limit (max_tokens) and/or the success command of an existing task, without recreating it. The new values apply from the next attempt (an attempt that is already running keeps its cap). To continue a task that stopped on its budget, prefer resume_task with a higher max_cost_usd. Values are totals for the whole task, not increments: a task that has spent $18 of $20 needs max_cost_usd above 18, for example 30.', WRITE,
+    { project: PROJECT, task: TASK, ...LIMIT_PARAMS },
+    (a) => svc.summary(svc.updateTaskLimits(svc.resolveTask(a.project, a.task), { maxCostUsd: a.max_cost_usd, maxIterations: a.max_iterations, maxTokens: a.max_tokens, successCommand: a.success_command }, actor)));
 
   tool('create_share_link', 'Create a preview share link', 'Create a link that lets someone without a bivouac account view the live preview of this task only. Choose how long it stays valid. Anyone with the link can see the preview until it expires or is revoked.', WRITE,
     { project: PROJECT, task: TASK, duration: z.enum(['1h', '24h', '7d', 'never']).default('24h').describe('How long the link works.') },
