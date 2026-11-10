@@ -4,4 +4,4 @@ try {
   if (t !== 'dark' && t !== 'light') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   document.documentElement.classList.toggle('dark', t === 'dark');
   document.documentElement.style.colorScheme = t;
-} catch (e) { /* storage blocked: keep the default (dark) */ }
+} catch { /* storage blocked: keep the default (dark) */ }

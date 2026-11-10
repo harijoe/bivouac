@@ -3,7 +3,6 @@ import { ShieldCheck } from 'lucide-react';
 import { api, type Session } from '@/api';
 import { AsyncButton } from '@/components/app/async-button';
 import { CopyField, ErrorNote, Note } from '@/components/app/misc';
-import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAsync } from '@/lib/hooks';

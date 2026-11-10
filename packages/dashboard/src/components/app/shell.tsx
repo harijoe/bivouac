@@ -77,7 +77,7 @@ export function Shell({ session, path, banner, children, wide }: { session: Sess
         </div>
       </header>
       {banner}
-      <main className={`mx-auto w-full flex-1 px-4 py-6 max-w-6xl`}>
+      <main className={`mx-auto w-full flex-1 px-4 py-6 ${wide ? "max-w-screen-2xl" : "max-w-6xl"}`}>
         {session.user && <Crumbs crumbs={crumbsFor(path)} />}
         {children}
       </main>

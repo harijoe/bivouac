@@ -9,7 +9,7 @@ export function useStream(url: string | null, handlers: Record<string, (data: an
     const es = new EventSource(url);
     for (const name of Object.keys(ref.current)) es.addEventListener(name, (e) => ref.current[name]?.(JSON.parse((e as MessageEvent).data)));
     return () => es.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // deps are intentionally narrower than the closure
   }, [url]);
 }
 
@@ -47,7 +47,7 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[] = []) {
     setLoading(true);
     loadRef.current().then((d) => { if (live) { setData(d); setError(''); } }).catch((e) => { if (live) setError((e as Error).message); }).finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // deps are intentionally narrower than the closure
   }, [tick, ...deps]);
   const reload = useCallback(() => setTick((t) => t + 1), []);
   return { data, error, loading, reload, setData };

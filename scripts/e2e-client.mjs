@@ -93,7 +93,7 @@ if (!REAL) {
   const st0 = (await dash('GET', '/api/claude')).json;
   check(st0.connected === false, 'Claude is not connected yet');
   const noClaude = await call('create_task', { project: 'demo', name: 'nope', prompt: 'x' });
-  check(noClaude.isError && /connect Claude in the bivouac dashboard/.test(noClaude.content[0].text), 'create_task explains how to connect Claude');
+  check(noClaude.isError && /connect a Claude account in the bivouac dashboard/.test(noClaude.content[0].text), 'create_task explains how to connect Claude');
   const login = (await dash('POST', '/api/claude/login')).json;
   const lst = await waitFor(async () => { const s = (await dash('GET', `/api/claude/login/${login.id}`)).json; return s.phase === 'waiting_code' ? s : false; }, 60000, 1500, 'sign-in URL');
   check(/^https:\/\/claude\.com\/cai\/oauth\/authorize\?/.test(lst.url), 'sign-in URL extracted from the terminal output');
