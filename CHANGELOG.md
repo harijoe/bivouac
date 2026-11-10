@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.1
+
+Feedback from a real long task (about thirty attempts, a Postgres database with 100 000 rows).
+
+### Added
+- **Task history by attempt**: the Activity tab groups the history per attempt, the most recent first. Each attempt is a collapsible section whose header shows its number, start time, duration, cost (an API-equivalent estimate with a subscription), the result of its success check and the beginning of the agent's last message. The running or latest attempt is open, the others folded; inside, events stay chronological with tool calls folded. Instructions (dashboard or MCP), stops, blocked / stuck / budget / out-of-attempts states, resumptions and limit changes appear as markers between attempts. Filters (agent messages, checks, tool calls, instructions), search with highlighting that opens the matching attempts, a copyable link per attempt (`#attempt-12`), older attempts loaded on demand (15 at a time, events only when an attempt is opened), and live events that land in the open attempt without moving the page. The page no longer replays the whole history when it opens.
+- **`get_task` lists attempts** (newest first, paginated with `attempts_limit` / `attempts_before`, same facts as the header and what triggered each).
+- **Change the limits of an existing task**: budget, maximum attempts and success command, from the task page (Settings tab) and through the new MCP tool `update_task` or the new parameters of `resume_task`. They apply from the next attempt; the change is recorded in the history. A task stopped on its budget cannot resume without a higher limit: the dashboard asks for it in a dialog, and the API / MCP answer with a clear message (values are totals, not increments). A task out of attempts is offered more.
+- **Memory and CPU per service** in `bivouac.yml` were already accepted; the default memory is now **1 GB** (it was 512 MB), applied when the container is created and also to existing containers when the value changes. Services run without swap.
+- **A service killed for lack of memory is reported**: in the task history and in the service's log, with the limit in force and how to raise it; bivouac starts it again (up to 5 times) and tells the agent in its next prompt.
+
+### Fixed
+- **`push_branch` runs without the repository's git hooks** (`--no-verify`): a `.githooks/pre-push` calling `pnpm` no longer blocks the push (the repository's checks run in the task, as the success command). The error message only mentions the GitHub App's permissions on a real authorization error (403); other failures say what actually happened.
+- `get_task` read the *oldest* 5000 events of a task, so a long task showed stale messages; it now reads the latest.
+- Resuming a stopped task no longer resets its attempt limit to "attempts made + 10" when it still has attempts left.
+
 ## 0.4.0
 
 The dashboard is rebuilt, tasks can be created from it, logs are live, and Claude accounts are plural.

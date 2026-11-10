@@ -47,3 +47,10 @@
 ## v0.4
 
 - **CSP: `style-src 'self' 'unsafe-inline'`.** shadcn/Radix (popper positioning), Sonner and the virtualized log list set `style` attributes, which a strict `style-src` blocks. Scripts stay `script-src 'self'` (no inline, no eval); the theme initialiser is a served file (`/theme-init.js`), not an inline script. Style injection cannot execute code, and the app has no user-supplied HTML.
+
+## v0.4.1
+
+- **Attempt = the `iteration` stored on each event; markers are attached to the attempt that follows them.** Instructions, status changes (stopped, blocked, stuck, budget, max attempts, failed, succeeded, resumed) and limit changes are "markers": an event that is a marker belongs to the first attempt that *starts after it* (or, for the newest, is shown above it). That puts an instruction sent while attempt N runs before attempt N+1, where it is applied. Everything is computed by SQL (`attempts.ts`) so a page of attempts costs a few indexed queries, not a scan of the history; the events of an attempt are fetched only when it is opened.
+- **No SSE replay for the task page** (`?tail=1`): the page loads its own history by pages and takes only new events from the stream; after a reconnection it reloads the first page.
+- **Docker's `OOMKilled` flag is not trusted alone.** It is sometimes false when the process dies instantly (seen in the integration test), so an unrequested exit 137 of a service is reported as a probable memory kill, with a more careful sentence. Services get no swap, so the kill is immediate and attributable.
+- **Plain `resume` extends the attempt limit only when it is exhausted**, and records it in the history; a limit the owner raised explicitly is kept. A budget-stopped task refuses a plain resume with the way out, because it would stop again at once.
