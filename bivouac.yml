@@ -10,7 +10,7 @@ services:
     env:
       POSTGRES_PASSWORD: dev
     volume: /var/lib/postgresql/data
-    memory: 512m
+    memory: 1g
 success: node check.mjs
 limits:
   cpus: 1
