@@ -24,7 +24,7 @@ Retours de la vraie tâche longue (tracks/agent-analytics). Tout est vérifié p
 - **Services** : mémoire par défaut 1 Go, appliquée aux conteneurs existants (`docker update`, sinon recréation avec volume conservé), sans swap ; un service tué (OOM ou code 137) ou arrêté est signalé dans l'historique et le log du service avec la limite, redémarré (5 fois max) et signalé à l'agent. Test d'intégration Docker réel (limites + vrai kill mémoire). Découverte : le drapeau `OOMKilled` de Docker est parfois faux, d'où le traitement du code 137.
 - **Tests** : unitaires daemon 155, dashboard 47 + intégration Docker (`services.test.ts`) ; captures 375 px / 1280 px, deux modes, sans débordement : `docs/screenshots/v0.4.1` (avant : `docs/screenshots/v0.3`/`v0.4`, liste plate). 
 - **Non fait** : e2e sur VM Hetzner neuve (`e2e-fresh-vps.sh`) non rejoué pour cette version (changements limités au daemon/dashboard, couverts par les tests unitaires et d'intégration Docker en CI) ; pas de VM créée.
-- **Release** : version 0.4.1 préparée (CHANGELOG, `DEFAULT_VERSION`, paquets), voir plus bas pour le tag et les images.
+- **Release** : tag `v0.4.1`, CI verte (commit 4b8d8ca et tag), images `ghcr.io/harijoe/bivouac-{daemon,task}` `0.4.1` tirées en anonyme ; release GitHub **non créée / en brouillon** : tu la crées et la publies, puis tu testes la mise à jour 0.4.0 → 0.4.1 depuis le dashboard.
 
 ## Journal v0.4 (2026-11-10)
 Refonte du dashboard et nouvelles fonctions. Tout est vérifié par moi, sauf la liste « À valider manuellement ».
@@ -126,3 +126,5 @@ MISSION_V03_TERMINEE
 MISSION_V031_TERMINEE
 
 MISSION_V04_TERMINEE
+
+MISSION_V041_TERMINEE
