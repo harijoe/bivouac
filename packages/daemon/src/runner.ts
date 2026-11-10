@@ -205,7 +205,7 @@ export class TaskManager {
   }
 
   private async execute(id: number, a: Active) {
-    let task = this.store.getTask(id)!;
+    const task = this.store.getTask(id)!;
     const project = this.store.getProject(task.projectId)!;
     const sb = a.sandbox;
     this.store.setStatus(id, 'starting');
@@ -215,7 +215,7 @@ export class TaskManager {
     if (await sb.prepareRepo({ repoUrl: project.repoUrl, token, branch: task.branch, base: task.baseBranch })) {
       this.store.addEvent(id, 'system', { subtype: 'clone', branch: task.branch, base: task.baseBranch });
     }
-    let eff = await this.loadConfig(task, project, sb, false);
+    const eff = await this.loadConfig(task, project, sb, false);
     if (a.stop) return this.finishStopped(id);
 
     // 2. container, sidecars and preview routes (served by Traefik from the database, see routes.ts)

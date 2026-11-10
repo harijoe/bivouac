@@ -375,7 +375,8 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   // ---- live updates (SSE). ?task=ID adds that task's events (replayed from ?after=ID / Last-Event-ID).
   app.get('/api/stream', (c) => {
     const taskId = c.req.query('task') ? Number(c.req.query('task')) : null;
-    const after = Number(c.req.header('last-event-id') ?? c.req.query('after') ?? 0);
+    // ?tail=1: only what happens from now on (the page loads the history itself, a page at a time); a reconnection resumes from Last-Event-ID
+    const after = c.req.header('last-event-id') !== undefined ? Number(c.req.header('last-event-id')) : c.req.query('tail') && taskId ? ((store.db.prepare('SELECT MAX(id) m FROM events WHERE task_id=?').get(taskId) as any)?.m ?? 0) : Number(c.req.query('after') ?? 0);
     return streamSSE(c, async (s) => {
       let lastSent = after;
       const queue: StoreMessage[] = [];

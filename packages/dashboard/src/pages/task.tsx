@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, GitBranch, GitPullRequest, Info, Play, Send, Square } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ExternalLink, GitBranch, GitPullRequest, Info, Send, Square } from 'lucide-react';
 import { isTerminal } from '@bivouac/shared';
 import { ago, api, ApiError, duration, fmtTok, fmtUsd, totalTokens, type Share, type TaskEvent, type TaskView } from '@/api';
 import { AsyncButton } from '@/components/app/async-button';
 import { LogViewer } from '@/components/app/log-viewer';
 import { EmptyState, ErrorNote, Note, PageSkeleton, STATUS, StatusBadge } from '@/components/app/misc';
-import { TaskFeed } from '@/components/app/task-feed';
+import { TaskHistory } from '@/components/app/task-history';
+import { ResumeButton, TaskLimits } from '@/components/app/task-limits';
 import { TaskManage } from '@/components/app/task-manage';
 import { TaskShares } from '@/components/app/task-shares';
 import { Button } from '@/components/ui/button';
@@ -15,11 +16,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAsync, useNow, useStream } from '@/lib/hooks';
 import { Link } from '@/lib/router';
-import { isClaudeProblem, toItems } from '@/lib/task-items';
+import { isClaudeProblem } from '@/lib/task-items';
 
 const TABS = ['activity', 'logs', 'sharing', 'settings'] as const;
 type Tab = (typeof TABS)[number];
+// `#attempt-12` is a link to an attempt of the Activity tab
 const tabFromHash = (): Tab => (TABS as readonly string[]).includes(location.hash.slice(1)) ? (location.hash.slice(1) as Tab) : 'activity';
+
 
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="grid gap-0.5 sm:grid-cols-[10rem_1fr] sm:gap-4"><dt className="text-muted-foreground">{label}</dt><dd className="min-w-0 break-words">{children}</dd></div>;
@@ -28,11 +31,14 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 export function TaskPage({ project, name }: { project: string; name: string }) {
   const [task, setTask] = useState<TaskView | null>(null);
   const [missing, setMissing] = useState(false);
-  const [events, setEvents] = useState<TaskEvent[]>([]);
   const [shares, setShares] = useState<Share[]>([]);
   const [msg, setMsg] = useState('');
   const [tab, setTabState] = useState<Tab>(tabFromHash);
-  const seen = useRef(new Set<number>());
+  // live events are handed to the history, which loads its own pages: nothing is replayed from the start
+  const listeners = useRef(new Set<(e: TaskEvent) => void>());
+  const subscribe = useCallback((fn: (e: TaskEvent) => void) => { listeners.current.add(fn); return () => { listeners.current.delete(fn); }; }, []);
+  const readies = useRef(0);
+  const [reconnects, setReconnects] = useState(0);
   const act = useAsync();
   const send = useAsync();
   const id = task?.id;
@@ -47,14 +53,14 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
       setTask(full); setShares(full.shares ?? []);
     } catch (e) { if (e instanceof ApiError && e.status === 404) setMissing(true); }
   }, [project, name]);
-  useEffect(() => { setTask(null); setMissing(false); setEvents([]); seen.current = new Set(); void reload(); }, [reload]);
-  useStream(id ? `/api/stream?task=${id}` : '/api/stream', {
+  useEffect(() => { setTask(null); setMissing(false); readies.current = 0; void reload(); }, [reload]);
+  useStream(id ? `/api/stream?task=${id}&tail=1` : '/api/stream', {
     task: (t) => { if (t.id === id) setTask((old) => (old ? { ...old, ...t } : old)); },
-    event: (e: TaskEvent) => { if (seen.current.has(e.id)) return; seen.current.add(e.id); setEvents((old) => [...old, e].sort((a, b) => a.id - b.id)); },
+    event: (e: TaskEvent) => { listeners.current.forEach((fn) => fn(e)); },
+    ready: () => { readies.current += 1; if (readies.current > 1) setReconnects((n) => n + 1); },
   });
   const active = !!task && !isTerminal(task.status);
   const now = useNow(active);
-  const items = useMemo(() => toItems(events), [events]);
 
   if (missing) return <EmptyState title="This task does not exist (anymore)" action={<Button asChild><Link to={`/projects/${project}`}>Back to the project</Link></Button>}>It may have been renamed or deleted.</EmptyState>;
   if (!task) return <PageSkeleton rows={3} />;
@@ -68,6 +74,7 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
   const hint = STATUS[task.status].hint;
   const isCost = task.costKind === 'cost';
   const canResume = !active && task.status !== 'succeeded';
+  const afterResume = async () => { await reload(); };
 
   const submitMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -106,7 +113,7 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
         {task.ports.filter((p) => !p.primary).map((p) => <AsyncButton key={p.name} variant="outline" className="h-11 sm:h-9" busyLabel="Opening…" onClick={() => openPreview(p.name)}><ExternalLink />Open {p.name}</AsyncButton>)}
         {active
           ? <AsyncButton variant="outline" className="h-11 sm:h-9" busyLabel="Stopping…" onClick={() => post('stop')}><Square />Stop</AsyncButton>
-          : canResume && <AsyncButton variant={waiting ? 'default' : 'outline'} className="h-11 sm:h-9" busyLabel="Resuming…" onClick={() => post('resume')}><Play />Resume</AsyncButton>}
+          : canResume && <ResumeButton task={task} variant={waiting ? 'default' : 'outline'} onDone={afterResume} />}
         <AsyncButton variant="outline" className="h-11 sm:h-9" busyLabel="Pushing the branch…" onClick={() => post('push')}><GitBranch />{task.pushed ? 'Push again' : 'Push branch'}</AsyncButton>
         {task.prUrl
           ? <Button asChild variant="outline" className="h-11 sm:h-9"><a href={task.prUrl} target="_blank" rel="noreferrer"><GitPullRequest />View pull request</a></Button>
@@ -151,7 +158,7 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
           <TabsTrigger value="sharing" className="h-10 sm:h-8">Preview &amp; sharing{shares.some((s) => s.active) && ` (${shares.filter((s) => s.active).length})`}</TabsTrigger>
           <TabsTrigger value="settings" className="h-10 sm:h-8">Settings</TabsTrigger>
         </TabsList>
-        <TabsContent value="activity" className="pt-3"><TaskFeed items={items} follow={active} /></TabsContent>
+        <TabsContent value="activity" className="pt-3"><TaskHistory task={task} subscribe={subscribe} reconnects={reconnects} /></TabsContent>
         <TabsContent value="logs" className="pt-3"><LogViewer taskId={task.id} live={active} status={task.status} /></TabsContent>
         <TabsContent value="sharing" className="space-y-4 pt-3"><TaskShares task={task} shares={shares} reload={reload} /></TabsContent>
         <TabsContent value="settings" className="space-y-8 pt-3">
@@ -168,6 +175,7 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
             </Fact>
             {task.services.length > 0 && <Fact label="Services">{task.services.map((x) => <div key={x.name}><b>{x.name}</b> <span className="text-muted-foreground">{x.image}</span></div>)}</Fact>}
           </dl>
+          <TaskLimits task={task} onSaved={(t) => setTask((old) => (old ? { ...old, ...t } : old))} />
           <TaskManage task={task} />
         </TabsContent>
       </Tabs>

@@ -34,6 +34,7 @@ export function toItems(events: TaskEvent[]): Item[] {
         if (d.subtype === 'push') out.push({ kind: 'note', id: e.id, text: `Branch ${d.branch} pushed to GitHub.` });
         else if (d.subtype === 'pr') out.push({ kind: 'note', id: e.id, text: 'Pull request opened.', href: d.url });
         else if (d.subtype === 'config_warning') out.push({ kind: 'note', id: e.id, text: d.message, bad: true });
+        else if (d.subtype === 'service_incident') out.push({ kind: 'note', id: e.id, text: String(d.message ?? ''), bad: true });
         break;
       default: break;
     }
@@ -43,3 +44,10 @@ export function toItems(events: TaskEvent[]): Item[] {
 
 /** Does the error text point at the Claude account / token / usage limit? Then the page offers to reconnect. */
 export const isClaudeProblem = (error: string | null | undefined) => !!error && /claude|token|credential|authenticat|limit|account/i.test(error);
+
+export type Filters = { messages: boolean; checks: boolean; tools: boolean; instructions: boolean };
+export const allFilters: Filters = { messages: true, checks: true, tools: true, instructions: true };
+/** Filters of the history: agent messages, checks, tool calls, instructions. Notes (push, pull request, problems) always stay. */
+export function filterItems(items: Item[], f: Filters): Item[] {
+  return items.filter((i) => (i.kind === 'say' ? f.messages : i.kind === 'check' ? f.checks : i.kind === 'tools' ? f.tools : i.kind === 'you' ? f.instructions : true));
+}

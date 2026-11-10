@@ -77,6 +77,36 @@ for (const [name, status, error] of [['node-26', 'blocked', 'This repository req
   const t = await ctx.svc.createTask({ project: p.name, name, prompt: `Demo ${name}`, successCommand: 'true', maxCostUsd: 3 }, actor).then((r) => r.task).catch(() => null);
   if (t) { await ctx.mgr.stop(t.id).catch(() => {}); store.setStatus(t.id, status, error); }
 }
+// a long task: 31 attempts with instructions, a stop and a resume, a budget raised, a check that fails then passes
+{
+  const t = await ctx.svc.createTask({ project: p.name, name: 'agent-analytics', prompt: 'Add the analytics pages for the agents, backed by Postgres with 100 000 rows', successCommand: 'pnpm test && pnpm build', maxCostUsd: 40, maxIterations: 40 }, actor).then((r) => r.task).catch(() => null);
+  if (t) {
+    await ctx.mgr.stop(t.id).catch(() => {});
+    store.db.prepare('DELETE FROM events WHERE task_id=?').run(t.id);
+    const ins = store.db.prepare('INSERT INTO events(task_id, iteration, kind, data_json, created_at) VALUES (?,?,?,?,?)');
+    const base = Date.now() - 31 * 25 * 60_000;
+    const msgs = ['Reading the existing dashboard code and the schema.', 'Adding the aggregation queries for the agent pages.', 'The count query is slow on 100 000 rows: adding an index and a materialized view.', 'Postgres was restarted while running the seed, retrying with a smaller batch.', 'Writing the chart component and its tests.', 'Fixing the type errors reported by the build.', 'The e2e test times out on the aggregation: caching the result for 30 seconds.'];
+    store.db.transaction(() => {
+      ins.run(t.id, 0, 'status', JSON.stringify({ status: 'queued' }), new Date(base - 1000).toISOString());
+      for (let n = 1; n <= 31; n++) {
+        const at = (sec) => new Date(base + (n - 1) * 25 * 60_000 + sec * 1000).toISOString();
+        if (n === 12) { ins.run(t.id, 11, 'status', JSON.stringify({ status: 'stopped' }), at(-300)); ins.run(t.id, 11, 'user_instruction', JSON.stringify({ text: 'Use the materialized view instead of the live count, the page must load in under a second.', queued: false }), at(-200)); ins.run(t.id, 11, 'status', JSON.stringify({ status: 'queued' }), at(-100)); }
+        if (n === 20) { ins.run(t.id, 19, 'status', JSON.stringify({ status: 'budget_exceeded' }), at(-400)); ins.run(t.id, 19, 'system', JSON.stringify({ subtype: 'limits_changed', by: 'mcp:Claude:julien', changes: [], message: 'Budget: $20.00 → $40.00. Applies from the next attempt.' }), at(-300)); ins.run(t.id, 19, 'status', JSON.stringify({ status: 'queued' }), at(-200)); }
+        if (n === 27) ins.run(t.id, 26, 'user_instruction', JSON.stringify({ text: 'Do not touch the legacy export, only the new pages.', queued: true }), at(-30));
+        ins.run(t.id, n, 'status', JSON.stringify({ status: 'running' }), at(0));
+        ins.run(t.id, n, 'assistant_text', JSON.stringify({ text: msgs[n % msgs.length] }), at(20));
+        for (let k = 0; k < 4; k++) ins.run(t.id, n, 'tool_use', JSON.stringify({ id: `${n}-${k}`, name: k % 2 ? 'Edit' : 'Bash', input: k % 2 ? { file_path: `src/pages/analytics-${n}.tsx` } : { command: `pnpm vitest run analytics-${n}` } }), at(30 + k));
+        if (n === 15) ins.run(t.id, n, 'system', JSON.stringify({ subtype: 'service_incident', service: 'postgres', cause: 'oom', message: 'The service “postgres” was killed because it ran out of memory (limit 512 MB). bivouac started it again; its data volume is intact. Raise the limit with `services.postgres.memory` in bivouac.yml (for example `memory: 2g`) if it keeps happening.' }), at(300));
+        ins.run(t.id, n, 'assistant_text', JSON.stringify({ text: n === 31 ? 'All the analytics pages are in place and the build is green.' : `Attempt ${n}: ${msgs[(n + 3) % msgs.length]}` }), at(600));
+        ins.run(t.id, n, 'result', JSON.stringify({ subtype: 'success', costUsd: 0.4 + (n % 5) * 0.21, durationMs: 600000 }), at(900));
+        ins.run(t.id, n, 'status', JSON.stringify({ status: 'checking' }), at(910));
+        ins.run(t.id, n, 'check', JSON.stringify({ command: 'pnpm test && pnpm build', exitCode: n === 31 ? 0 : n % 3 === 0 ? 2 : 1, output: n === 31 ? 'All 142 tests passed\nbuild ok' : `FAIL src/analytics-${n}.test.tsx\n  expected 100000 rows, got 99998` }), at(1200));
+      }
+      ins.run(t.id, 31, 'status', JSON.stringify({ status: 'succeeded' }), new Date(base + 30 * 25 * 60_000 + 1210_000).toISOString());
+    })();
+    store.db.prepare("UPDATE tasks SET status='succeeded', iteration=31, cost_usd=21.4, in_tok=2100000, out_tok=310000, started_at=?, finished_at=?, max_cost_usd=40 WHERE id=?").run(new Date(base).toISOString(), new Date(base + 30 * 25 * 60_000 + 1210_000).toISOString(), t.id);
+  }
+}
 const first = store.getTaskByName(p.id, 'dark-mode');
 if (first) {
   const ws = sandboxes.get(first.id)?.ws;
