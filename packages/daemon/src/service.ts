@@ -17,6 +17,20 @@ export class UserError extends Error {
   constructor(message: string, public code = 'invalid', public status: 400 | 404 | 409 | 412 | 502 = 400) { super(message); }
 }
 
+/**
+ * The message for a failed push. Permissions are only blamed on a real authorization error (HTTP 403 or "permission denied"):
+ * a failure for another reason (network, rejected update, hook…) must not send the owner to the wrong place.
+ */
+export function pushFailureMessage(raw: string): string {
+  const msg = raw.trim();
+  if (/\b403\b|permission to .* denied|write access to repository not granted|permission denied/i.test(msg)) {
+    return `Push failed: GitHub refused the write (${msg}). The GitHub App (or the project token) needs write access to “Contents” on this repository.`;
+  }
+  if (/non-fast-forward|fetch first|\[rejected\]|stale info/i.test(msg)) return `Push failed: the remote branch has commits this one does not (${msg}). Ask the agent to rebase on it or resolve it by hand.`;
+  if (/could not resolve host|unable to access|timed out|connection (reset|refused)/i.test(msg)) return `Push failed: GitHub could not be reached (${msg}). Try again in a moment.`;
+  return `Push failed: ${msg}`;
+}
+
 export interface Actor { kind: 'user' | 'mcp' | 'system'; label: string }
 
 export interface TaskSummary {
@@ -299,7 +313,7 @@ export class Service {
     this.auth.audit(actor.label, 'task_deleted', { task: t.name, project: t.projectName });
   }
   async pushBranch(t: Task, actor: Actor) {
-    try { await this.mgr.push(t.id); } catch (e: any) { throw new UserError(`Push failed: ${e.message}. ${t.pushed ? '' : 'The GitHub App needs write access to contents on this repository.'}`, 'push_failed', 502); }
+    try { await this.mgr.push(t.id); } catch (e: any) { throw new UserError(pushFailureMessage(String(e?.message ?? e)), 'push_failed', 502); }
     this.auth.audit(actor.label, 'branch_pushed', { task: t.name, branch: t.branch });
     return this.store.getTask(t.id)!;
   }

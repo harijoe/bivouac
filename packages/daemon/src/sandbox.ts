@@ -119,7 +119,9 @@ abstract class HostWorkspace {
     return cloned;
   }
   async push(o: { branch: string; token: string | null }) {
-    await gitOk(['push', '-u', 'origin', `${o.branch}:${o.branch}`], { cwd: this.safe('repo'), token: o.token, uid: this.uid });
+    // --no-verify: the repository's own git hooks (pre-push often calls tools the executor does not have, such as pnpm) are
+    // not the executor's business. The repository's checks run in the task, as the success command.
+    await gitOk(['push', '--no-verify', '-u', 'origin', `${o.branch}:${o.branch}`], { cwd: this.safe('repo'), token: o.token, uid: this.uid });
   }
   async unpushed() {
     const repo = this.safe('repo');
