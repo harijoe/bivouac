@@ -30,8 +30,6 @@ export async function api<T = any>(method: string, url: string, body?: unknown):
 }
 
 export const fmtUsd = (n: number) => `$${n.toFixed(n < 10 ? 2 : 1)}`;
-/** With a Claude subscription the figure is the CLI's API-equivalent estimate, not money spent. */
-export const costLabel = (k?: CostKind) => (k === 'cost' ? 'cost' : 'API-equivalent estimate');
 export const fmtTok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
 export const totalTokens = (u: Usage) => u.inputTokens + u.outputTokens + u.cacheCreationTokens;
 export function ago(iso: string | null | undefined, now = Date.now()) {

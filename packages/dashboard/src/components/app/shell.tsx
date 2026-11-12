@@ -1,5 +1,5 @@
-import { Fragment, type ReactNode } from 'react';
-import { LogOut, Settings as SettingsIcon } from 'lucide-react';
+import { Fragment, useState, type ReactNode } from 'react';
+import { Loader2, LogOut, Settings as SettingsIcon } from 'lucide-react';
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from '@/components/ui/breadcrumb';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -43,6 +43,7 @@ function Crumbs({ crumbs }: { crumbs: Crumb[] }) {
 
 function UserMenu({ session }: { session: Session }) {
   const u = session.user!;
+  const [leaving, setLeaving] = useState(false);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -54,7 +55,7 @@ function UserMenu({ session }: { session: Session }) {
         <DropdownMenuLabel className="font-normal"><span className="block truncate font-medium">{u.login}</span><span className="text-xs text-muted-foreground">{u.role === 'admin' ? 'Administrator' : 'Member'}</span></DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => navigate('/settings')}><SettingsIcon />Settings</DropdownMenuItem>
-        <DropdownMenuItem onSelect={async () => { await api('POST', '/api/logout'); location.href = '/login'; }}><LogOut />Sign out</DropdownMenuItem>
+        <DropdownMenuItem disabled={leaving} onSelect={async (e) => { e.preventDefault(); setLeaving(true); try { await api('POST', '/api/logout'); location.href = '/login'; } catch { setLeaving(false); } }}>{leaving ? <Loader2 className="animate-spin" /> : <LogOut />}{leaving ? 'Signing out…' : 'Sign out'}</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

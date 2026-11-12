@@ -13,8 +13,9 @@ export function ConfirmDialog({ trigger, title, description, confirmLabel = 'Con
 }) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   return (
-    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setError(''); }}>
+    <Dialog open={open} onOpenChange={(o) => { if (busy) return; setOpen(o); if (!o) setError(''); }}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent>
         <DialogHeader>
@@ -23,10 +24,10 @@ export function ConfirmDialog({ trigger, title, description, confirmLabel = 'Con
         </DialogHeader>
         <ErrorNote>{error}</ErrorNote>
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => setOpen(false)}>Cancel</Button>
           <AsyncButton variant={destructive ? 'destructive' : 'default'} busyLabel={busyLabel} onClick={async () => {
-            setError('');
-            try { await onConfirm(); setOpen(false); } catch (e) { setError((e as Error).message); }
+            setError(''); setBusy(true);
+            try { await onConfirm(); setOpen(false); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
           }}>{confirmLabel}</AsyncButton>
         </DialogFooter>
       </DialogContent>

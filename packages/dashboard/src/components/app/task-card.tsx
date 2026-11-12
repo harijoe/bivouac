@@ -1,4 +1,5 @@
-import { ExternalLink, GitBranch, GitPullRequest } from 'lucide-react';
+import { useState } from 'react';
+import { ExternalLink, GitBranch, GitPullRequest, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { isTerminal } from '@bivouac/shared';
 import { ago, api, fmtUsd, type TaskView } from '@/api';
@@ -10,6 +11,15 @@ async function openPreview(t: TaskView) {
   const w = window.open('', '_blank');
   try { const r = await api('POST', `/api/tasks/${t.id}/preview-link`); if (w) w.location.href = r.url; else location.href = r.url; }
   catch (e) { w?.close(); toast.error((e as Error).message); }
+}
+
+function PreviewButton({ t, className }: { t: TaskView; className: string }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button type="button" disabled={busy} aria-busy={busy || undefined} className={className} onClick={async () => { setBusy(true); try { await openPreview(t); } finally { setBusy(false); } }}>
+      {busy ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : <ExternalLink className="size-3.5" aria-hidden="true" />}{busy ? 'Opening…' : 'Open preview'}
+    </button>
+  );
 }
 
 /** A task as a card; the whole card opens the task (the stretched link), inner links stay clickable above it. */
@@ -32,7 +42,7 @@ export function TaskCard({ t, now }: { t: TaskView; now: number }) {
       {(t.prUrl || (t.devPort && t.status !== 'queued')) && (
         <div className="flex flex-wrap items-center gap-x-4 text-sm">
           {t.prUrl && <a href={t.prUrl} target="_blank" rel="noreferrer" className={inner}><GitPullRequest className="size-3.5" aria-hidden="true" />Pull request</a>}
-          {t.devPort && t.status !== 'queued' && <button type="button" onClick={() => void openPreview(t)} className={inner}><ExternalLink className="size-3.5" aria-hidden="true" />Open preview</button>}
+          {t.devPort && t.status !== 'queued' && <PreviewButton t={t} className={inner} />}
         </div>
       )}
     </Card>
