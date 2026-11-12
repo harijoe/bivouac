@@ -246,6 +246,7 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   }));
   app.get('/api/settings/audit', run((c) => { admin(c); return c.json(auth.listAudit(Number(c.req.query('limit') ?? 100))); }));
   app.delete('/api/settings/grants/:id', run((c) => {
+    admin(c);
     oauth.revokeGrant(param(c, 'id'));
     auth.audit(actorOf(c).label, 'mcp_client_revoked', { grant: param(c, 'id') });
     return c.json({ ok: true });
