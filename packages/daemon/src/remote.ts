@@ -81,7 +81,7 @@ export class RemoteSandbox implements Sandbox {
         while ((i = buf.indexOf('\n')) >= 0) { line(buf.slice(0, i)); buf = buf.slice(i + 1); }
       }
     } catch { /* connection dropped or aborted */ }
-    if (buf) line(buf);
+    if (buf) { try { line(buf); } catch { code ??= 1; } }
     return code ?? (ac.signal.aborted ? 143 : 1);
   }
 }
