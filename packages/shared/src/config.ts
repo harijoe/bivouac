@@ -24,10 +24,14 @@ export interface ProjectConfig {
   services?: Record<string, ServiceConfig>;
   success?: string;
   limits?: { cpus?: number; memory?: string };
+  /** How bivouac watches and photographs the preview. */
+  preview?: { health?: { port?: number; path?: string }; screenshots?: string[] };
   budget?: { max_iterations?: number; max_cost_usd?: number; max_tokens?: number };
 }
 
 export const MAX_PORTS = 6;
+export const MAX_SCREENSHOT_PAGES = 6;
+export const DEFAULT_SCREENSHOT_PAGES = ['/'];
 export const MAX_SERVICES = 5;
 export const RESERVED_SERVICE_NAMES = ['task', 'localhost', 'traefik', 'web', 'executor'];
 const IMAGE_RE = /^[a-z0-9][a-z0-9._/-]{0,150}(:[A-Za-z0-9._-]{1,128})?(@sha256:[a-f0-9]{64})?$/;
@@ -110,6 +114,34 @@ export function parseRuntime(rt: unknown): Record<string, string> {
   return out;
 }
 
+const URL_PATH_RE = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?#\[\]]{0,300}$/;
+/** `preview:` section: where the dev server answers its health check and which pages are photographed after each attempt. */
+export function parsePreview(pv: unknown): NonNullable<ProjectConfig['preview']> {
+  if (typeof pv !== 'object' || !pv || Array.isArray(pv)) throw new Error('preview must be a mapping, for example { health: { path: "/health" }, screenshots: ["/", "/login"] }');
+  const raw = pv as Record<string, any>;
+  const out: NonNullable<ProjectConfig['preview']> = {};
+  if (raw.health !== undefined) {
+    const h = raw.health;
+    if (typeof h !== 'object' || !h || Array.isArray(h)) throw new Error('preview.health must be a mapping with an optional port and path');
+    out.health = {};
+    if (h.port !== undefined) {
+      if (typeof h.port !== 'number' || !Number.isInteger(h.port) || h.port < 1 || h.port > 65535) throw new Error('preview.health.port must be a port number between 1 and 65535');
+      out.health.port = h.port;
+    }
+    if (h.path !== undefined) {
+      if (typeof h.path !== 'string' || !URL_PATH_RE.test(h.path)) throw new Error('preview.health.path must be a path starting with /, for example /health');
+      out.health.path = h.path;
+    }
+  }
+  if (raw.screenshots !== undefined) {
+    const s = raw.screenshots;
+    if (!Array.isArray(s) || s.length > MAX_SCREENSHOT_PAGES) throw new Error(`preview.screenshots must be a list of at most ${MAX_SCREENSHOT_PAGES} paths, for example ["/", "/login"]`);
+    for (const p of s) if (typeof p !== 'string' || !URL_PATH_RE.test(p)) throw new Error(`preview.screenshots: "${String(p)}" is not a path starting with /`);
+    out.screenshots = s as string[];
+  }
+  return out;
+}
+
 /** Parse and validate a bivouac.yml document. Throws on invalid input. */
 export function parseProjectConfig(text: string): ProjectConfig {
   const raw = parse(text) ?? {};
@@ -153,6 +185,7 @@ export function parseProjectConfig(text: string): ProjectConfig {
     cfg.dev = port ? { command, port } : { command };
   }
   if (raw.services !== undefined) cfg.services = parseServices(raw.services);
+  if (raw.preview !== undefined) cfg.preview = parsePreview(raw.preview);
   if (raw.limits !== undefined) {
     cfg.limits = { cpus: num('limits.cpus', raw.limits.cpus), memory: raw.limits.memory === undefined ? undefined : String(raw.limits.memory) };
     if (cfg.limits.memory && !/^\d+(\.\d+)?[kmgKMG]?$/.test(cfg.limits.memory)) throw new Error('limits.memory must look like 512m or 4g');

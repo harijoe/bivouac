@@ -132,6 +132,10 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     return c.json(svc.attemptsPage(taskOf(c), { before: c.req.query('before') ? Number(c.req.query('before')) : undefined, limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined, only }));
   }));
   app.get('/api/tasks/:id/attempts/:n/events', run((c) => c.json(svc.attemptEvents(taskOf(c), Number(param(c, 'n'))))));
+  // what an attempt changed (`which` = attempt number or `base`)
+  const which = (c: C): number | 'base' => (param(c, 'which') === 'base' ? 'base' : Number(param(c, 'which')));
+  app.get('/api/tasks/:id/diff/:which', run(async (c) => c.json(await svc.attemptDiff(taskOf(c), which(c)))));
+  app.get('/api/tasks/:id/diff/:which/patch', run(async (c) => c.json(await svc.attemptPatch(taskOf(c), which(c), c.req.query('file') || undefined, Number(c.req.query('offset') ?? 0), Number(c.req.query('limit') ?? 400)))));
   app.get('/api/tasks/:id/history/search', run((c) => c.json(svc.searchAttempts(taskOf(c), String(c.req.query('q') ?? '')))));
   app.get('/api/tasks/:id/devlogs', run(async (c) => c.json({ text: await ctx.mgr.devLogs(taskOf(c).id, Number(c.req.query('lines') ?? 200)) })));
   app.post('/api/tasks/:id/stop', run(async (c) => c.json(view(await svc.stopTask(taskOf(c), actorOf(c))))));

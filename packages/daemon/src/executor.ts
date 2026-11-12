@@ -146,6 +146,18 @@ export function createExecutorApp(cfg: DaemonConfig, docker: Dockerode, login: L
   app.get('/sandboxes/:id/service-logs', wrap(async (c) => c.json({ text: await sb(c).serviceLogs(c.req.query('name') ?? '', Number(c.req.query('tail') ?? 500)) })));
   app.get('/sandboxes/:id/service-states', wrap(async (c) => c.json({ states: await sb(c).serviceStates() })));
   app.post('/sandboxes/:id/service-restart', wrap(async (c) => { await sb(c).restartService(c.req.query('name') ?? ''); return c.json({ ok: true }); }));
+  app.post('/sandboxes/:id/mark', wrap(async (c) => c.json({ mark: await sb(c).mark() })));
+  app.post('/sandboxes/:id/diff-summary', wrap(async (c) => {
+    const b = await c.req.json();
+    const h = b.heads && typeof b.heads === 'object' ? { from: b.heads.from ? String(b.heads.from) : null, to: b.heads.to ? String(b.heads.to) : null } : undefined;
+    return c.json(await sb(c).diffSummary(String(b.from), String(b.to), h));
+  }));
+  app.post('/sandboxes/:id/diff-patch', wrap(async (c) => {
+    const b = await c.req.json();
+    if (!Array.isArray(b.paths) || !b.paths.every((x: unknown) => typeof x === 'string')) throw new Error('paths must be an array of strings');
+    return c.json(await sb(c).diffPatch(String(b.from), String(b.to), b.paths, Number(b.offset ?? 0), Number(b.limit ?? 400)));
+  }));
+  app.get('/sandboxes/:id/binary', wrap(async (c) => { const b = await sb(c).readBinary(c.req.query('path') ?? ''); return c.json({ base64: b ? b.toString('base64') : null }); }));
   app.get('/sandboxes/:id/fingerprint', wrap(async (c) => c.json({ hash: await sb(c).fingerprint() })));
   app.get('/sandboxes/:id/file', wrap(async (c) => c.json({ content: await sb(c).readFile(c.req.query('path') ?? '') })));
   app.put('/sandboxes/:id/file', wrap(async (c) => { const b = await c.req.json(); await sb(c).writeFile(String(b.path), String(b.content)); return c.json({ ok: true }); }));

@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS idempotency (
 CREATE TABLE IF NOT EXISTS claude_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE, kind TEXT NOT NULL, secret_enc TEXT NOT NULL,
   connected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), is_default INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS attempt_git (
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, attempt INTEGER NOT NULL,
+  start_head TEXT, start_snap TEXT, end_head TEXT, end_snap TEXT,
+  started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), ended_at TEXT, PRIMARY KEY (task_id, attempt));
 CREATE TABLE IF NOT EXISTS instructions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, text TEXT NOT NULL,
   consumed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
@@ -221,7 +225,7 @@ export class Store {
       id: r.id, projectId: r.project_id, projectName: r.project_name, name: r.name, title: r.title, prompt: r.prompt, successCommand: r.success_command,
       branch: r.branch, baseBranch: r.base_branch, status: r.status, iteration: r.iteration, maxIterations: r.max_iterations,
       maxCostUsd: r.max_cost_usd, maxTokens: r.max_tokens, sessionId: r.session_id, usage,
-      devPort: r.dev_port ?? null, ports, services: Object.entries(live.services).map(([name, v]) => ({ name, image: v.image })), configError: live.error, previewUrl: this.previewUrlFor(r.project_name, r.name), pushed: !!r.pushed, prUrl: r.pr_url, error: r.error, accountName: r.account_name ?? null,
+      devPort: r.dev_port ?? null, ports, services: Object.entries(live.services).map(([name, v]) => ({ name, image: v.image })), preview: null, aliasUrl: null, configError: live.error, previewUrl: this.previewUrlFor(r.project_name, r.name), pushed: !!r.pushed, prUrl: r.pr_url, error: r.error, accountName: r.account_name ?? null,
       createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at,
     };
   }
@@ -341,6 +345,22 @@ export class Store {
   pendingInstructionCount(taskId: number): number {
     return (this.db.prepare('SELECT COUNT(*) n FROM instructions WHERE task_id=? AND consumed=0').get(taskId) as any).n;
   }
+  // ---- git marks of each attempt (see gitdiff.ts)
+  beginAttemptGit(taskId: number, attempt: number, m: { head: string | null; snap: string } | null) {
+    this.db.prepare('INSERT OR REPLACE INTO attempt_git(task_id,attempt,start_head,start_snap) VALUES(?,?,?,?)').run(taskId, attempt, m?.head ?? null, m?.snap ?? null);
+  }
+  endAttemptGit(taskId: number, attempt: number, m: { head: string | null; snap: string } | null) {
+    this.db.prepare(`UPDATE attempt_git SET end_head=?, end_snap=?, ended_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE task_id=? AND attempt=?`).run(m?.head ?? null, m?.snap ?? null, taskId, attempt);
+  }
+  getAttemptGit(taskId: number, attempt: number): { startHead: string | null; startSnap: string | null; endHead: string | null; endSnap: string | null; ended: boolean } | null {
+    const r = this.db.prepare('SELECT * FROM attempt_git WHERE task_id=? AND attempt=?').get(taskId, attempt) as any;
+    return r ? { startHead: r.start_head, startSnap: r.start_snap, endHead: r.end_head, endSnap: r.end_snap, ended: !!r.ended_at } : null;
+  }
+  /** Attempts that have a git record, with their size of change if already computed (newest first). */
+  attemptsWithGit(taskId: number): number[] {
+    return (this.db.prepare('SELECT attempt FROM attempt_git WHERE task_id=? ORDER BY attempt DESC').all(taskId) as any[]).map((r) => r.attempt);
+  }
+
   routeTasks(): RouteTask[] {
     return (this.db.prepare('SELECT t.id, t.name, t.dev_port, t.live_config, p.name AS project FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.dev_port IS NOT NULL OR t.live_config IS NOT NULL').all() as any[])
       .map((r) => {

@@ -1,3 +1,4 @@
+import type { AttemptDiff, DiffPatch } from '@bivouac/shared';
 import { mergeConfig, parseProjectConfig, slugify, titleFromPrompt, validateTaskName, type Project, type Task } from '@bivouac/shared';
 import type { DaemonConfig } from './config.js';
 import { baseUrl } from './config.js';
@@ -420,13 +421,55 @@ export class Service {
   attemptEvents(t: Task, attempt: number) { return attemptEvents(this.store.db, t.id, attempt); }
   searchAttempts(t: Task, text: string) { return searchAttempts(this.store.db, t.id, text); }
 
+  // ---- diffs
+  /** The two sides of the diff of an attempt (or of the whole task against its base branch). */
+  private async diffSides(t: Task, which: number | 'base') {
+    const sb = this.mgr.sandboxFor(t);
+    if (which === 'base') {
+      const now = await sb.mark();
+      if (!now) throw new UserError('This task has no repository yet.', 'no_repo', 404);
+      return { from: `origin/${t.baseBranch}`, to: now.snap, heads: { from: `origin/${t.baseBranch}`, to: now.head }, live: this.mgr.isActive(t.id), against: `origin/${t.baseBranch}` };
+    }
+    const g = this.store.getAttemptGit(t.id, which);
+    if (!g?.startSnap) throw new UserError(`No change record for attempt ${which}: it ran before bivouac 0.5 or the repository could not be read.`, 'no_diff', 404);
+    let toSnap = g.endSnap, toHead = g.endHead, live = false;
+    if (!g.ended || !toSnap) { const now = await sb.mark(); if (!now) throw new UserError('This task has no repository yet.', 'no_repo', 404); toSnap = now.snap; toHead = now.head; live = !g.ended; }
+    return { from: g.startSnap, to: toSnap, heads: { from: g.startHead, to: toHead }, live, against: which === 1 ? 'the start of the task' : `the start of attempt ${which}` };
+  }
+  async attemptDiff(t: Task, which: number | 'base'): Promise<AttemptDiff> {
+    const side = await this.diffSides(t, which);
+    const sb = this.mgr.sandboxFor(t);
+    const sum = await sb.diffSummary(side.from, side.to, side.heads.from === `origin/${t.baseBranch}` ? undefined : side.heads);
+    let uncommitted = false;
+    if (side.heads.to) uncommitted = (await sb.diffSummary(side.heads.to, side.to).catch(() => null))?.totals.files ? true : false;
+    return { ...sum, attempt: which, live: side.live, committed: sum.commits.length > 0, uncommitted, against: side.against };
+  }
+  /** A window of the patch of one file, or of the whole change when `file` is empty. */
+  async attemptPatch(t: Task, which: number | 'base', file: string | undefined, offset = 0, limit = 400): Promise<DiffPatch & { file: string | null }> {
+    const side = await this.diffSides(t, which);
+    const sb = this.mgr.sandboxFor(t);
+    let paths: string[] = [];
+    if (file) {
+      const sum = await sb.diffSummary(side.from, side.to);
+      const f = sum.files.find((x) => x.path === file);
+      if (!f) throw new UserError(`The file "${file}" did not change in this attempt. Use the file list to see what changed.`, 'unknown_file', 404);
+      paths = f.oldPath ? [f.oldPath, f.path] : [f.path];
+    }
+    return { ...(await sb.diffPatch(side.from, side.to, paths, offset, limit)), file: file ?? null };
+  }
+
   /** What an assistant needs to report on a task: the status plus the last things the agent said and a page of attempts. */
-  describeTask(t: Task, o: { attemptsBefore?: number; attemptsLimit?: number } = {}) {
+  async describeTask(t: Task, o: { attemptsBefore?: number; attemptsLimit?: number } = {}) {
     const messages = this.store.lastEvents(t.id, 'assistant_text', 3).map((e) => String(e.data.text ?? '').slice(0, 600));
     const lastCheck = this.store.lastEvents(t.id, 'check', 1)[0];
     const limit = Math.min(Math.max(Math.trunc(o.attemptsLimit ?? 10), 1), 50);
     const page = this.attemptsPage(t, { before: o.attemptsBefore, limit });
     const oldest = page.attempts.at(-1)?.attempt;
+    // files changed by each attempt of the page (best effort: a failure only leaves the field out)
+    const changes = new Map<number, { files: number; added: number; deleted: number; uncommittedOnly: boolean }>();
+    await Promise.all(page.attempts.map(async (a) => {
+      try { const d = await this.attemptDiff(t, a.attempt); changes.set(a.attempt, { files: d.totals.files, added: d.totals.added, deleted: d.totals.deleted, uncommittedOnly: d.totals.files > 0 && !d.committed }); } catch { /* attempt without record */ }
+    }));
     const markerText = (m: { kind: string; text?: string; status?: string }) => (m.kind === 'instruction' ? `instruction: ${String(m.text).slice(0, 200)}` : m.kind === 'limits' ? String(m.text) : `task ${m.status}`);
     return {
       ...this.summary(t),
@@ -437,7 +480,7 @@ export class Service {
       attempts: page.attempts.map((a) => ({
         attempt: a.attempt, startedAt: a.startedAt, durationSeconds: Math.round(a.durationMs / 1000), running: a.running, costUsd: a.costUsd === null ? null : Number(a.costUsd.toFixed(4)),
         check: a.check ? (a.check.passed ? 'passed' : `failed (exit code ${a.check.exitCode})`) : 'not run', lastAgentMessage: a.lastMessage ? a.lastMessage.slice(0, 200) : null,
-        startedAfter: a.markers.map(markerText),
+        startedAfter: a.markers.map(markerText), changes: changes.get(a.attempt) ?? null,
       })),
       attemptsNextBefore: page.hasMore && oldest ? oldest : null,
       shareLinks: this.previews.listShares(t.id).filter((s) => s.active).map((s) => ({ id: s.id, url: this.shareUrl(t, this.previews.shareToken(s.id) ?? ''), urls: this.shareUrls(t, this.previews.shareToken(s.id) ?? ''), expiresAt: s.expiresAt ? new Date(s.expiresAt * 1000).toISOString() : null })),

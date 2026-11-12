@@ -49,6 +49,19 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
     { project: PROJECT, task: TASK, attempts_limit: z.number().int().min(1).max(50).optional().describe('How many attempts to list (default 10, newest first).'), attempts_before: z.number().int().positive().optional().describe('Pagination: list attempts older than this attempt number (use attemptsNextBefore from the previous answer).') },
     (a) => svc.describeTask(svc.resolveTask(a.project, a.task), { attemptsBefore: a.attempts_before, attemptsLimit: a.attempts_limit }));
 
+  tool('get_attempt_diff', 'Get what an attempt changed', 'Read what one attempt of a task changed: the list of files with +added/-deleted lines and the commits the agent made, or the patch itself, a window of lines at a time. Includes changes the agent did not commit. `attempt` is a number (see the attempts in get_task, each with its `changes`) or "base" for everything the task changed compared with its base branch. Without `file` the patch of all files is returned file after file; pass `file` for one file. When `truncated` is true, ask again with offset = nextOffset to read on.', READ,
+    { project: PROJECT, task: TASK, attempt: z.union([z.number().int().positive(), z.literal('base')]).describe('Attempt number, or "base" for the whole task against its base branch.'),
+      file: z.string().max(500).optional().describe('Path of one changed file. Leave out for the file list plus the start of the whole patch.'),
+      offset: z.number().int().min(0).optional().describe('First line of the patch to return (default 0).'), limit: z.number().int().min(1).max(1500).optional().describe('How many lines (default 400).') },
+    async (a) => {
+      const t = svc.resolveTask(a.project, a.task);
+      const sum = await svc.attemptDiff(t, a.attempt);
+      const patch = await svc.attemptPatch(t, a.attempt, a.file, a.offset ?? 0, a.limit ?? 400);
+      return { attempt: a.attempt, comparedWith: sum.against, live: sum.live, totals: sum.totals, commits: sum.commits, uncommittedChanges: sum.uncommitted,
+        files: sum.files.map((f) => ({ path: f.path, ...(f.oldPath ? { renamedFrom: f.oldPath } : {}), status: f.status, added: f.added, deleted: f.deleted, ...(f.binary ? { binary: true } : {}) })),
+        patch: patch.lines.join('\n'), file: patch.file, offset: patch.offset, totalLines: patch.total, truncated: patch.truncated, nextOffset: patch.nextOffset, binary: patch.binary };
+    });
+
   tool('create_task', 'Create and start a task',
     'Start a Claude Code agent on a project, in its own container, branch and live preview. Returns immediately with the preview URL and dashboard link; use get_task to follow progress. ' +
     'The agent works until the success command exits with 0 (retrying with the failure output) or a budget is reached. Choose a short unique name (lowercase letters, digits, dashes): it becomes part of the preview URL. ' +

@@ -5,8 +5,9 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
-import { DEFAULT_SERVICE_CPUS, DEFAULT_SERVICE_MEMORY, type ServiceConfig } from '@bivouac/shared';
+import { DEFAULT_SERVICE_CPUS, DEFAULT_SERVICE_MEMORY, type DiffPatch, type DiffSummary, type GitMark, type ServiceConfig } from '@bivouac/shared';
 import { chownTree, git, gitOk } from './git.js';
+import { diffPatch, diffSummary, markState } from './gitdiff.js';
 
 export interface SandboxSpec {
   taskId: number;
@@ -62,6 +63,14 @@ export interface Sandbox {
   serviceStates(): Promise<ServiceState[]>;
   /** Starts a stopped sidecar again (its data volume is kept). */
   restartService(name: string): Promise<void>;
+  /** The HEAD and a snapshot commit of the working tree right now (see gitdiff.ts); null when there is no repository yet. */
+  mark(): Promise<GitMark | null>;
+  /** Files that differ between two marks (or `origin/<branch>`), with line counts. `heads` adds the commits between them. */
+  diffSummary(from: string, to: string, heads?: { from: string | null; to: string | null }): Promise<DiffSummary>;
+  /** A window of the patch of one file (both paths for a rename). */
+  diffPatch(from: string, to: string, paths: string[], offset: number, limit: number): Promise<DiffPatch>;
+  /** A binary file below the workspace (at most 8 MB). Returns null when absent or too large. */
+  readBinary(rel: string): Promise<Buffer | null>;
   /** Files below the workspace (`repo/…`, `.bivouac/…`). Returns null when absent. */
   readFile(rel: string): Promise<string | null>;
   writeFile(rel: string, content: string): Promise<void>;
@@ -86,6 +95,21 @@ abstract class HostWorkspace {
   async readFile(rel: string) {
     const p = this.safe(rel);
     return existsSync(p) ? readFileSync(p, 'utf8') : null;
+  }
+  async readBinary(rel: string) {
+    const p = this.safe(rel);
+    if (!existsSync(p) || statSync(p).size > 8 * 1024 * 1024) return null;
+    return readFileSync(p);
+  }
+  async mark() {
+    const repo = this.safe('repo');
+    return existsSync(path.join(repo, '.git')) ? markState({ cwd: repo, uid: this.uid }) : null;
+  }
+  async diffSummary(from: string, to: string, heads?: { from: string | null; to: string | null }) {
+    return diffSummary({ cwd: this.safe('repo'), uid: this.uid }, from, to, heads);
+  }
+  async diffPatch(from: string, to: string, paths: string[], offset: number, limit: number) {
+    return diffPatch({ cwd: this.safe('repo'), uid: this.uid }, from, to, paths, offset, limit);
   }
   async tail(rel: string, o: { before?: number; after?: number; bytes?: number } = {}): Promise<TailWindow> {
     const p = this.safe(rel);
@@ -153,9 +177,9 @@ abstract class HostWorkspace {
     const idx = path.join(tmpdir(), `bv-fp-${randomUUID()}`);
     const env = { GIT_INDEX_FILE: idx };
     try {
-      if ((await git(['read-tree', 'HEAD'], { cwd: repo, env })).code !== 0) return '';
-      await git(['add', '-A', '--', '.', ':!.bivouac'], { cwd: repo, env });
-      const r = await git(['write-tree'], { cwd: repo, env });
+      if ((await git(['read-tree', 'HEAD'], { cwd: repo, env, uid: this.uid })).code !== 0) return '';
+      await git(['add', '-A', '--', '.', ':!.bivouac'], { cwd: repo, env, uid: this.uid });
+      const r = await git(['write-tree'], { cwd: repo, env, uid: this.uid });
       return r.code === 0 ? r.stdout.trim() : '';
     } finally { rmSync(idx, { force: true }); }
   }

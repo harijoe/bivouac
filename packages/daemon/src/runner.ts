@@ -264,7 +264,11 @@ export class TaskManager {
     // 4. agent loop
     let failure: { output: string; exitCode: number } | null = null;
     let lastCheck: { output: string; fingerprint: string } | null = null;
+    // the attempt whose git end-mark is still to be recorded (every way out of the loop passes through the `finally`)
+    let open: number | null = null;
+    try {
     for (;;) {
+      if (open !== null) { await this.markAttempt(id, sb, open, 'end'); open = null; }
       task = this.store.getTask(id)!;
       if (task.iteration >= task.maxIterations) return void this.store.setStatus(id, 'max_iterations');
       const remaining = task.maxCostUsd - task.usage.costUsd;
@@ -273,6 +277,8 @@ export class TaskManager {
       // limits and success command can be changed while the task exists: read at the start of every attempt
       const successCmd = task.successCommand;
       this.store.patchTask(id, { iteration });
+      await this.markAttempt(id, sb, iteration, 'begin');
+      open = iteration;
       // the agent may have edited bivouac.yml: new ports and services take effect now
       eff = await this.loadConfig(task, project, sb, true);
       runtime = await this.prepareRuntime(id, sb, eff, a);
@@ -327,6 +333,19 @@ export class TaskManager {
       task = this.store.getTask(id)!;
       if (task.iteration >= task.maxIterations) return void this.store.setStatus(id, 'max_iterations');
       if (task.usage.costUsd >= task.maxCostUsd || (task.maxTokens && tokensOf(task.usage) >= task.maxTokens)) return void this.store.setStatus(id, 'budget_exceeded');
+    }
+    } finally {
+      if (open !== null) await this.markAttempt(id, sb, open, 'end');
+    }
+  }
+
+  /** Records the state of the repository at the start / end of an attempt, for the per-attempt diff. Never fails an attempt. */
+  private async markAttempt(id: number, sb: Sandbox, attempt: number, when: 'begin' | 'end') {
+    try {
+      const m = await sb.mark();
+      if (when === 'begin') this.store.beginAttemptGit(id, attempt, m); else this.store.endAttemptGit(id, attempt, m);
+    } catch (e: any) {
+      this.store.addEvent(id, 'system', { subtype: 'mark_failed', message: `Could not record the state of the repository (${when} of attempt ${attempt}): ${String(e?.message ?? e)}` }, attempt);
     }
   }
 

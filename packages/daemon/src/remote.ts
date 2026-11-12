@@ -1,5 +1,6 @@
 import type { ExecOpts, PrepareOpts, Sandbox, SandboxSpec, ServiceState } from './sandbox.js';
 import type { LoginSession } from './executor.js';
+import type { DiffPatch, DiffSummary, GitMark } from '@bivouac/shared';
 
 /** Client for the executor API. Implements Sandbox so the task runner does not care where Docker lives. */
 export class ExecutorClient {
@@ -40,6 +41,10 @@ export class RemoteSandbox implements Sandbox {
   async serviceLogs(name: string, tail: number) { return (await this.c.call('GET', this.p('service-logs', `&name=${encodeURIComponent(name)}&tail=${tail}`))).text as string; }
   async serviceStates() { return (await this.c.call('GET', this.p('service-states'))).states as ServiceState[]; }
   async restartService(name: string) { await this.c.call('POST', this.p('service-restart', `&name=${encodeURIComponent(name)}`)); }
+  async mark() { return (await this.c.call('POST', this.p('mark'))).mark as GitMark | null; }
+  async diffSummary(from: string, to: string, heads?: { from: string | null; to: string | null }) { return (await this.c.call('POST', this.p('diff-summary'), { from, to, heads })) as DiffSummary; }
+  async diffPatch(from: string, to: string, paths: string[], offset: number, limit: number) { return (await this.c.call('POST', this.p('diff-patch'), { from, to, paths, offset, limit })) as DiffPatch; }
+  async readBinary(rel: string) { const b64 = (await this.c.call('GET', this.p('binary', `&path=${encodeURIComponent(rel)}`))).base64 as string | null; return b64 === null ? null : Buffer.from(b64, 'base64'); }
   async fingerprint() { return (await this.c.call('GET', this.p('fingerprint'))).hash as string; }
   async readFile(rel: string) { return (await this.c.call('GET', this.p('file', `&path=${encodeURIComponent(rel)}`))).content as string | null; }
   async writeFile(rel: string, content: string) { await this.c.call('PUT', this.p('file'), { path: rel, content }); }

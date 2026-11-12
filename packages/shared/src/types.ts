@@ -43,6 +43,21 @@ export interface ClaudeAccount {
   projects: number;
 }
 
+/** How the dev server of a task is doing, as seen by the supervisor inside the container. */
+export interface PreviewHealth {
+  /** unknown: nothing reported yet; starting: launched, not answering yet; healthy; unhealthy: not answering, a restart is planned; down: gave up; stopped: the task container is not running. */
+  state: 'unknown' | 'starting' | 'healthy' | 'unhealthy' | 'down' | 'stopped';
+  /** Since when the preview is in this state (ISO time). */
+  since: string;
+  lastHealthyAt: string | null;
+  /** Restarts since it was last healthy. */
+  restarts: number;
+  /** Last known cause: a crash with its exit code or signal, a health check that failed, or the last words of the log. */
+  cause: string | null;
+  nextRetryAt: string | null;
+  updatedAt: string;
+}
+
 export interface TaskPort { name: string; port: number; primary: boolean; url: string }
 export interface TaskService { name: string; image: string }
 
@@ -70,6 +85,10 @@ export interface Task {
   ports: TaskPort[];
   /** Sidecar services of the task. */
   services: TaskService[];
+  /** Health of the dev server; null until the task has started one. */
+  preview: PreviewHealth | null;
+  /** Stable URL of the project's alias when it points at this task. */
+  aliasUrl: string | null;
   /** Last problem found in bivouac.yml when it was re-read from the task branch (the last valid configuration stays in use). */
   configError: string | null;
   pushed: boolean;
@@ -138,4 +157,85 @@ export interface AttemptsPage {
   lastEventId: number;
   /** Markers after the newest attempt (only on the first page). */
   trailing: HistoryMarker[];
+}
+
+// ---- diffs
+/** A point in the history of a task repository: its HEAD and a commit holding the whole working tree at that moment. */
+export interface GitMark { head: string | null; snap: string }
+export interface DiffFile {
+  path: string;
+  oldPath?: string;
+  status: 'added' | 'modified' | 'deleted' | 'renamed';
+  added: number;
+  deleted: number;
+  binary: boolean;
+}
+export interface DiffSummary {
+  files: DiffFile[];
+  totals: { files: number; added: number; deleted: number };
+  /** Commits the agent made between the two heads (newest first, at most 50). */
+  commits: { sha: string; subject: string }[];
+}
+export interface DiffPatch {
+  lines: string[];
+  offset: number;
+  total: number;
+  /** More lines exist after this window. */
+  truncated: boolean;
+  binary: boolean;
+  /** Where the next window starts; null at the end. */
+  nextOffset: number | null;
+}
+export interface AttemptDiff extends DiffSummary {
+  attempt: number | 'base';
+  /** The attempt was still running when the diff was computed: the right side is the working tree now. */
+  live: boolean;
+  /** Whether the attempt ended with at least one commit / only uncommitted changes. */
+  committed: boolean;
+  uncommitted: boolean;
+  /** Label of what the right side is compared with, for example "start of attempt 3" or "origin/main". */
+  against: string;
+}
+
+// ---- screenshots
+export interface ShotProblem { kind: 'http' | 'blank' | 'console' | 'request' | 'overlay' | 'unreachable' | 'timeout'; message: string }
+export interface Shot {
+  id: number;
+  taskId: number;
+  attempt: number;
+  /** Path of the page that was photographed, e.g. `/login`. */
+  page: string;
+  /** Viewport width: 375 or 1280. */
+  width: number;
+  httpStatus: number | null;
+  title: string | null;
+  /** The page loaded without any detected problem. */
+  ok: boolean;
+  blank: boolean;
+  problems: ShotProblem[];
+  consoleErrors: string[];
+  failedRequests: { url: string; status?: number; error?: string }[];
+  bytes: number;
+  createdAt: string;
+}
+export interface AttemptShots {
+  attempt: number;
+  /** Whether the success check of that attempt passed (null: not run). */
+  checkPassed: boolean | null;
+  shots: Shot[];
+  /** The capture itself failed or could not reach the dev server: why. */
+  error: string | null;
+}
+
+// ---- environment snapshots
+export interface EnvSnapshot {
+  id: number;
+  projectId: number;
+  fingerprint: string;
+  bytes: number;
+  createdAt: string;
+  lastUsedAt: string;
+  uses: number;
+  /** Current: matches what a new task of the project would ask for. */
+  current: boolean;
 }
