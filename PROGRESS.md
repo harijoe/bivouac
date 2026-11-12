@@ -1,5 +1,13 @@
 # PROGRESS
 
+## Mission revue v0.5 (2026-11-12)
+Six revues parallèles, chaque constat soumis à un vérificateur indépendant, puis correctifs (un commit par correctif, 19 commits de `0fd4d40` à `b29159f`). Détail, constats rejetés et constats reportés : `docs/review-v0.5.md` ; CHANGELOG `## Unreleased`. Aucun tag, aucune release, aucune image publiée.
+- **Corrigé, sécurité (P0)** : l'agent pouvait faire exécuter des commandes à l'exécuteur via `.git/config` (fsmonitor, filtres, textconv), envoyer le token d'écriture à une autre URL (`remote.origin.url`/`pushurl`) et faire lire/tronquer des fichiers de l'exécuteur par des liens symboliques. Tests de non-régression ajoutés.
+- **Corrigé, P1** : premier `restart.req` ignoré, cookie de partage lié à la tâche, session des membres d'une organisation autorisée, `get_project_context` (événements périmés, lenteur), avertissement « non poussé » après un premier push, retour arrière réel de `install.sh` et d'un démarrage raté dans `apply.sh`, fichier d'état écrit par root, onglet après renommage.
+- **Reporté** (liste dans `docs/review-v0.5.md`) : plafond des ressources des services demandés par l'agent, rotation de `dev.log`, rédaction des secrets dans `get_task`, élagage des marques git, fenêtre de lancement de la mise à jour, etc.
+- **Non vérifié** : les chemins d'échec de `apply.sh` n'ont pas été rejoués sur une VM (aucune VM créée) ; `bash -n` et un bac à sable pour `write_status` seulement.
+- Local : build, lint, typecheck, 13 + 67 + 189 tests unitaires et 7 tests d'intégration Docker verts.
+
 ## BLOQUÉ / questions
 - Aucun pour l'instant. (`dev.deslope.com` et `*.dev.deslope.com` résolvent déjà vers 78.47.63.246.)
 
