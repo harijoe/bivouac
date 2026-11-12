@@ -41,7 +41,7 @@ export class ServiceWatch {
   }
   start(everyMs = 10_000) {
     this.stop();
-    this.timer = setInterval(() => { void this.check(); }, everyMs);
+    this.timer = setInterval(() => { this.check().catch(() => {}); }, everyMs);
     this.timer.unref();
   }
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }

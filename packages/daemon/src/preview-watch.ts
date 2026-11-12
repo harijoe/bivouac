@@ -25,7 +25,7 @@ export class PreviewWatch {
 
   start(everyMs = 10_000) {
     this.stop();
-    this.timer = setInterval(() => { void this.tick(); }, everyMs);
+    this.timer = setInterval(() => { this.tick().catch(() => {}); }, everyMs);
     this.timer.unref();
   }
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
