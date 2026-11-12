@@ -1,6 +1,6 @@
 import Dockerode from 'dockerode';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chownSync, closeSync, copyFileSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chownSync, closeSync, constants as fsc, copyFileSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -122,14 +122,32 @@ abstract class HostWorkspace {
     if (p !== this.hostWs && !p.startsWith(this.hostWs + path.sep)) throw new Error('path escapes the workspace');
     return p;
   }
-  async readFile(rel: string) {
+  private noLinks(p: string) {
+    let cur = this.hostWs;
+    for (const part of path.relative(this.hostWs, p).split(path.sep).filter(Boolean)) {
+      cur = path.join(cur, part);
+      let st;
+      try { st = lstatSync(cur); } catch { return; }
+      if (st.isSymbolicLink()) throw new Error('symbolic link inside the workspace');
+    }
+  }
+  private openRead(rel: string) {
     const p = this.safe(rel);
-    return existsSync(p) ? readFileSync(p, 'utf8') : null;
+    this.noLinks(p);
+    try { return openSync(p, fsc.O_RDONLY | fsc.O_NOFOLLOW); } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw e;
+    }
+  }
+  async readFile(rel: string) {
+    const fd = this.openRead(rel);
+    if (fd === null) return null;
+    try { return readFileSync(fd, 'utf8'); } finally { closeSync(fd); }
   }
   async readBinary(rel: string) {
-    const p = this.safe(rel);
-    if (!existsSync(p) || statSync(p).size > 8 * 1024 * 1024) return null;
-    return readFileSync(p);
+    const fd = this.openRead(rel);
+    if (fd === null) return null;
+    try { return fstatSync(fd).size > 8 * 1024 * 1024 ? null : readFileSync(fd); } finally { closeSync(fd); }
   }
   async mark() {
     const repo = this.safe('repo');
@@ -142,15 +160,14 @@ abstract class HostWorkspace {
     return diffPatch({ cwd: this.safe('repo'), uid: this.uid, untrusted: true }, from, to, paths, offset, limit);
   }
   async tail(rel: string, o: { before?: number; after?: number; bytes?: number } = {}): Promise<TailWindow> {
-    const p = this.safe(rel);
-    if (!existsSync(p)) return { text: '', start: 0, end: 0, size: 0 };
-    const size = statSync(p).size;
+    const fd = this.openRead(rel);
+    if (fd === null) return { text: '', start: 0, end: 0, size: 0 };
+    const size = fstatSync(fd).size;
     const max = Math.min(Math.max(o.bytes ?? 65536, 1024), 1_000_000);
     let start: number, end: number;
     if (o.after !== undefined) { start = Math.min(o.after, size); end = Math.min(size, start + max); }
     else { end = Math.min(o.before ?? size, size); start = Math.max(0, end - max); }
     const buf = Buffer.alloc(end - start);
-    const fd = openSync(p, 'r');
     try { readSync(fd, buf, 0, buf.length, start); } finally { closeSync(fd); }
     let text = buf.toString('utf8');
     // cut on line boundaries: drop a leading partial line when paging up (it belongs to the previous window), and a trailing
@@ -169,8 +186,10 @@ abstract class HostWorkspace {
   }
   async writeFile(rel: string, content: string) {
     const p = this.safe(rel);
+    this.noLinks(p);
     mkdirSync(path.dirname(p), { recursive: true });
-    writeFileSync(p, content);
+    const fd = openSync(p, fsc.O_WRONLY | fsc.O_CREAT | fsc.O_TRUNC | fsc.O_NOFOLLOW, 0o644);
+    try { writeFileSync(fd, content); } finally { closeSync(fd); }
     chownTree(path.dirname(p), this.uid);
   }
   async prepareRepo(o: PrepareOpts): Promise<boolean> {

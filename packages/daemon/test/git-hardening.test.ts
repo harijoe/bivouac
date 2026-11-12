@@ -31,3 +31,18 @@ describe('host-side git on a repository the agent controls', () => {
     expect(execSync('git branch --list', { cwd: evil }).toString()).toBe('');
   });
 });
+
+describe('workspace file access', () => {
+  it('refuses to follow a symbolic link planted by the agent', async () => {
+    const { mkdirSync, symlinkSync, readFileSync } = await import('node:fs');
+    const sb = new LocalSandbox(mkdtempSync(path.join(tmpdir(), 'bv-sym-')));
+    const secret = path.join(mkdtempSync(path.join(tmpdir(), 'bv-secret-')), 's.txt');
+    writeFileSync(secret, 'secret');
+    mkdirSync(path.join(sb.ws, '.bivouac'), { recursive: true });
+    symlinkSync(secret, path.join(sb.ws, '.bivouac/blocked.md'));
+    await expect(sb.readFile('.bivouac/blocked.md')).rejects.toThrow(/symbolic link/);
+    await expect(sb.tail('.bivouac/blocked.md')).rejects.toThrow(/symbolic link/);
+    await expect(sb.writeFile('.bivouac/blocked.md', '')).rejects.toThrow(/symbolic link/);
+    expect(readFileSync(secret, 'utf8')).toBe('secret');
+  });
+});
