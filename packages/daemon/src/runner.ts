@@ -121,7 +121,7 @@ export class TaskManager {
     if (!t) return;
     if (!force) {
       const n = await this.unpushedCommits(t);
-      if (n > 0 && !t.pushed) throw Object.assign(new Error(`branch ${t.branch} has ${n} unpushed commit(s)`), { code: 'UNPUSHED', unpushed: n });
+      if (n > 0) throw Object.assign(new Error(`branch ${t.branch} has ${n} unpushed commit(s)`), { code: 'UNPUSHED', unpushed: n });
     }
     await this.stop(id).catch(() => {});
     await this.makeSandbox(t).destroy();
@@ -149,7 +149,7 @@ export class TaskManager {
     if (!gh) throw new Error('Project is not connected to GitHub: only GitHub repositories support pull requests.');
     const token = await this.repoToken(project, 'write');
     if (!token) throw new Error('Project is not connected to GitHub: no credential is available for this repository.');
-    if (!t.pushed) await this.push(id);
+    await this.push(id);
     const url = await createPullRequest({
       token, ...gh, head: t.branch, base: t.baseBranch, title: t.title,
       body: `${t.prompt}\n\n---\nStatus: ${t.status} after ${t.iteration} iteration(s). Created by bivouac task ${t.name}.`, fetchImpl: this.fetchImpl,

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import path from 'node:path';
 import { addTask, makeEnv, makeRemote, repoOf, taskDirOf } from './helpers.js';
 
@@ -175,6 +176,11 @@ describe('success loop', () => {
     await expect(env.mgr.destroy(t.id, false)).rejects.toMatchObject({ code: 'UNPUSHED' });
     await env.mgr.push(t.id);
     expect(env.store.getTask(t.id)!.pushed).toBe(true);
+    const repo = repoOf(env, t);
+    writeFileSync(path.join(repo, 'later.txt'), 'x');
+    execSync('git add -A && git -c user.name=t -c user.email=t@t commit -qm later', { cwd: repo });
+    await expect(env.mgr.destroy(t.id, false)).rejects.toMatchObject({ code: 'UNPUSHED' });
+    await env.mgr.push(t.id);
     await env.mgr.destroy(t.id, false);
     expect(env.store.getTask(t.id)).toBeNull();
     expect(existsSync(taskDirOf(env, t))).toBe(false);
