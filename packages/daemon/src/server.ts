@@ -72,7 +72,7 @@ export function createApp(ctx: Ctx) {
     if (wait) return c.text(`Too many attempts. Try again in ${wait} seconds.`, 429);
     const state = randomToken(24);
     const next = c.req.query('next') ?? '/';
-    setCookie(c, 'bv_gh_state', JSON.stringify({ state, next: next.startsWith('/') && !next.startsWith('//') ? next : '/' }), { httpOnly: true, sameSite: 'Lax', secure: cfg.previewScheme === 'https', path: '/', maxAge: 600 });
+    setCookie(c, 'bv_gh_state', JSON.stringify({ state, next: /^\/(?![/\\])[^\s]*$/.test(next) ? next : '/' }), { httpOnly: true, sameSite: 'Lax', secure: cfg.previewScheme === 'https', path: '/', maxAge: 600 });
     return c.redirect(ctx.gh.authorizeUrl(`${baseUrl(cfg)}/auth/github/callback`, state));
   });
   app.get('/auth/github/callback', async (c) => {
