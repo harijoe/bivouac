@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
@@ -68,7 +69,7 @@ function run(cmd: string, args: string[], o: { stdin?: string; cwd?: string } = 
 export async function createArchive(dir: string, fp: string, repo: string, paths: string[], maxBytes = SNAPSHOT_MAX_BYTES): Promise<{ bytes: number } | { tooLarge: number } | null> {
   if (!paths.length) return null;
   mkdirSync(dir, { recursive: true });
-  const file = snapshotFile(dir, fp), tmp = `${file}.tmp-${process.pid}`;
+  const file = snapshotFile(dir, fp), tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
   const r = await run('tar', ['-C', repo, '--null', '--files-from=-', '-cf', tmp], { stdin: paths.join('\0') });
   if (r.code !== 0 && r.code !== 1) { rmSync(tmp, { force: true }); throw new Error(`tar failed: ${r.stderr.trim()}`); } // 1 = a file changed while being read
   const bytes = statSync(tmp).size;
