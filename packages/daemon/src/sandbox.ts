@@ -311,6 +311,8 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
           NetworkMode: this.name,
           NanoCpus: spec.cpus ? Math.round(spec.cpus * 1e9) : undefined,
           Memory: spec.memory ? parseMemory(spec.memory) : undefined,
+          MemorySwap: spec.memory ? parseMemory(spec.memory) : undefined,
+          PidsLimit: 4096,
           RestartPolicy: { Name: 'no' },
           SecurityOpt: ['no-new-privileges:true'],
           CapDrop: ['NET_RAW'],
@@ -433,8 +435,9 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
     });
     const stream = await exec.start({ hijack: true, stdin: false });
     const out = new PassThrough(), err = new PassThrough();
-    out.on('data', (b) => o.onData?.(b.toString('utf8'), 'stdout'));
-    err.on('data', (b) => o.onData?.(b.toString('utf8'), 'stderr'));
+    out.setEncoding('utf8'); err.setEncoding('utf8');
+    out.on('data', (b: string) => o.onData?.(b, 'stdout'));
+    err.on('data', (b: string) => o.onData?.(b, 'stderr'));
     this.docker.modem.demuxStream(stream, out, err);
     let aborted = false;
     const onAbort = async () => {
@@ -512,8 +515,9 @@ export class LocalSandbox extends HostWorkspace implements Sandbox {
   exec(cmd: string[], o: ExecOpts = {}): Promise<number> {
     return new Promise((resolve) => {
       const p = spawn(cmd[0], cmd.slice(1), { cwd: o.cwd ?? this.ws, env: { ...process.env, ...o.env }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
-      p.stdout.on('data', (b) => o.onData?.(b.toString(), 'stdout'));
-      p.stderr.on('data', (b) => o.onData?.(b.toString(), 'stderr'));
+      p.stdout.setEncoding('utf8'); p.stderr.setEncoding('utf8');
+      p.stdout.on('data', (b) => o.onData?.(b, 'stdout'));
+      p.stderr.on('data', (b) => o.onData?.(b, 'stderr'));
       const kill = () => { try { process.kill(-p.pid!, 'SIGTERM'); } catch { /* gone */ } };
       if (o.signal?.aborted) kill(); else o.signal?.addEventListener('abort', kill, { once: true });
       p.on('error', () => resolve(127));
