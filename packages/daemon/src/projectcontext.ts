@@ -181,21 +181,18 @@ export class ProjectContext {
 
   private filesTouched(taskId: number): string[] {
     const set = new Set<string>();
-    for (const e of this.store.listEvents(taskId, 0, 5000)) {
-      if (e.kind !== 'tool_use') continue;
+    for (const e of this.store.lastEvents(taskId, 'tool_use', 100_000)) {
       const fp = e.data?.input?.file_path ?? e.data?.input?.path;
       if (typeof fp === 'string' && ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(e.data?.name)) set.add(fp.replace(/^\/workspace\/repo\//, ''));
     }
     return [...set].filter((f) => !isSecretPath(f));
   }
 
-  private async taskSection(p: Project, t: Task, full: boolean): Promise<{ text: string; problem: string | null }> {
-    const events = this.store.listEvents(t.id, 0, 5000);
-    const msgs = events.filter((e) => e.kind === 'assistant_text').map((e) => String(e.data.text ?? ''));
-    const checks = events.filter((e) => e.kind === 'check');
-    const last = checks[checks.length - 1];
+  private async taskSection(p: Project, t: Task, full: boolean, withPr = true): Promise<{ text: string; problem: string | null }> {
+    const msgs = this.store.lastEvents(t.id, 'assistant_text', 6).map((e) => String(e.data.text ?? ''));
+    const last = this.store.lastEvents(t.id, 'check', 1)[0];
     const files = this.filesTouched(t.id);
-    const pr = await this.prState(p, t);
+    const pr = withPr ? await this.prState(p, t) : 'none';
     const cost = `$${t.usage.costUsd.toFixed(2)}`;
     const lines = [
       `#### ${t.name} — ${t.status}${t.error ? ` (${redactSecrets(t.error).slice(0, 200)})` : ''}`,
@@ -271,7 +268,7 @@ export class ProjectContext {
     const problems: string[] = [];
     if (!shown.length) out.push('No task yet. A first task can be started with create_task.');
     for (const t of tasks) {
-      const s = await this.taskSection(p, t, false);
+      const s = await this.taskSection(p, t, false, shown.includes(t));
       if (s.problem) problems.push(s.problem);
       if (shown.includes(t)) out.push('', s.text);
     }

@@ -61,6 +61,12 @@ describe('helpers', () => {
 });
 
 describe('project snapshot', () => {
+  it('reports the latest message of a task with a very long history', async () => {
+    const env = makeEnv(); const p = addProject(env, remoteWithFiles());
+    const t = env.store.createTask({ projectId: p.id, name: 'long', title: 't', prompt: 'x', successCommand: 'true', baseBranch: 'main', maxIterations: 5, maxCostUsd: 10, maxTokens: null }, (id) => `agent/t-${id}-long`);
+    for (let i = 0; i < 5100; i++) env.store.addEvent(t.id, 'assistant_text', { text: `msg ${i}` });
+    expect(await env.svc.pctx.snapshot(p, 'task:long')).toContain("agent's last message: msg 5099");
+  });
   it('describes the project, the tasks and the problems, without secrets, within the budget', async () => {
     const env = makeEnv(); const remote = remoteWithFiles();
     const p = addProject(env, remote);
