@@ -53,7 +53,7 @@ export function TaskManage({ task }: { task: TaskView }) {
   const a = useAsync();
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    void a.run(async () => { const t = await api<TaskView>('POST', `/api/tasks/${task.id}/rename`, { name: newName }); navigate(`/projects/${t.projectName}/${t.name}#manage`, true); });
+    void a.run(async () => { const t = await api<TaskView>('POST', `/api/tasks/${task.id}/rename`, { name: newName }); navigate(`/projects/${t.projectName}/${t.name}#settings`, true); });
   };
   return (
     <div className="space-y-8">
