@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0
+
+Proof, diffs, a preview you can rely on, and fast task start-up.
+
+### Added
+- **Screenshots after each attempt**: when the dev server answers, bivouac photographs the pages listed under `preview.screenshots` in `bivouac.yml` (default `/`) at 375 px and 1280 px, with headless Chromium inside the task container (direct access, the preview's access check is not involved). Each shot carries the HTTP status, the page title, browser console errors and failed requests; an error page, an error overlay (Vite, Next) or a blank page is flagged. Dashboard: a gallery in each attempt (thumbnails, full-size dialog, comparison with the previous attempt, a note when the success check failed). MCP: `get_task` returns the last attempt's screenshots as images (compressed, at most 4) with their errors, and the new tool `get_attempt_screenshots` returns those of any attempt (`variant: full` for full size). Storage is bounded (the newest 12 attempts per task and 60 MB, removed with the task); a failed capture is logged and shown, never fails an attempt. The task image now ships Chromium (about 400 MB more).
+- **Diff per attempt**: the start and end state of every attempt are recorded (commit plus a snapshot of the working tree, so uncommitted changes count). The attempt section lists changed files with `+N −M`, a collapsible coloured diff per file, long diffs paged ("Show next lines"), and a **Changes** tab compares the whole task with its base branch. MCP: `get_task` summarises each attempt's changes; `get_attempt_diff` reads the file list or the patch, paged.
+- **Reliable preview**: the supervisor probes the dev server (`preview.health: { port, path }` in `bivouac.yml`), restarts it when it dies or stops answering with a growing delay (1 s … 60 s) and gives up after 8 restarts in a row. The task page shows "Preview unavailable since …", the last cause, a link to the log and a **Restart preview** button (also the MCP tool `restart_preview`). Stops, restarts, recovery and giving up are in the history and told to the agent in its next prompt. The agent can restart it with `touch /workspace/.bivouac/restart.req`.
+- **Project alias**: a stable host `<alias>.<domain>` (for example `app.dev.example.com`) that you point at one task of the project from the dashboard or with the MCP tool `set_project_alias_task`, for OAuth redirect URIs and webhooks of the app under test. It uses the same access check as the task's own URL; administrators can list **public paths** (for example `/api/webhooks/`) that skip it so that third-party callers can reach them. Needs the wildcard DNS record you already have for previews.
+- **Share links**: expired and revoked links are told apart on the page the visitor sees; the owner sees expired and revoked links in a folded list.
+- **Faster task start-up with environment snapshots**: after a successful `setup`, bivouac keeps what `setup` installed and git ignores (`node_modules`, virtualenvs…) as an archive keyed by a fingerprint of the lock files, the `setup` command, the tool versions and the task image. A new task of the project with the same fingerprint unpacks it before running `setup`, which still runs and stays correct if the snapshot is stale or damaged (a snapshot that makes setup fail is discarded and setup runs again from scratch). At most 3 snapshots are kept per project (least recently used removed), secrets (`.env`, keys) and logs are never included. Settings > Projects shows the snapshot (date, size, fingerprint) and a **Rebuild** button. Measured on a Node + pnpm (about 800 packages) + Postgres example: agent ready after 5.0 s instead of 16 s, preview available after 6.3 s instead of 16.7 s (see `docs/bench-snapshot-v0.5.json`).
+
+### Changed
+- The dev server's health is polled twice a second until it is up (the preview is reported as soon as it answers).
+
 ## 0.4.1
 
 Feedback from a real long task (about thirty attempts, a Postgres database with 100 000 rows).

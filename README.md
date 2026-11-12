@@ -139,6 +139,21 @@ Each time an agent session starts (a new attempt, a resume), bivouac reads `bivo
 
 Each task has its own Docker network (no port is published on the server; Traefik joins it to route the previews). On top of that, bivouac installs a small firewall (`bivouac-firewall.service`, removed by the uninstaller) so that a task container or a service **cannot reach anything running on the server itself**: SSH, bivouac's internal ports, Traefik's API. It cannot reach the `web` and `executor` containers either, nor the cloud provider's metadata address (`169.254.169.254`). Internet access and the traffic between a task and its own services are untouched.
 
+
+### Preview, screenshots, alias and snapshots (`bivouac.yml`)
+
+```yaml
+preview:
+  health: { path: /health }          # port defaults to the first port; any HTTP answer is healthy unless a path is set (then < 500)
+  screenshots: ["/", "/login"]       # photographed at 375 px and 1280 px after each attempt (default: "/")
+```
+
+- **Screenshots** are taken inside the task container after each attempt, kept for the newest 12 attempts of a task (60 MB), shown in each attempt of the dashboard and returned to Claude / ChatGPT by `get_task` and `get_attempt_screenshots`.
+- **Diffs**: each attempt shows the files it changed (committed or not); the **Changes** tab compares the task with its base branch; MCP `get_attempt_diff`.
+- **Preview health**: a crashed or hung dev server is restarted with a growing delay (up to 8 tries), then reported as unavailable with the last cause; **Restart preview** (dashboard, MCP `restart_preview`).
+- **Alias** (Settings > Projects > Preview alias): `app.<domain>` always opens the task you choose. Use it as the OAuth redirect URI or webhook URL of the app under test, and move it with the dashboard or `set_project_alias_task` when another task becomes the one to test. Webhooks come without a browser session: list their path (for example `/api/webhooks/`) under **Public paths**; everything else stays private.
+- **Snapshots**: the first task whose `setup` succeeds keeps the installed dependencies; later tasks of the project start from them (3 kept per project, never secrets). Settings > Projects shows and rebuilds them.
+
 ## Your own domain
 
 In the setup page (or later in *Settings → More settings → Address*), enter a domain such as `bv.example.com`. bivouac shows the two DNS records to create at your registrar:

@@ -84,7 +84,7 @@ const transport = new StreamableHTTPClientTransport(mcpUrl, { authProvider: prov
 const mcp = new Client({ name: 'e2e', version: '1' });
 await mcp.connect(transport);
 const tools = (await mcp.listTools()).tools;
-check(tools.length === 13 && tools.find((t) => t.name === 'list_projects').annotations.readOnlyHint === true, 'all 13 tools listed with annotations');
+check(tools.length === 18 && tools.find((t) => t.name === 'list_projects').annotations.readOnlyHint === true, 'all 18 tools listed with annotations');
 const call = async (name, a) => mcp.callTool({ name, arguments: a });
 check(toolJson(await call('list_projects', {})).some((p) => p.name === 'demo'), 'list_projects sees the project');
 
@@ -122,6 +122,16 @@ await waitFor(async () => {
 }, REAL ? 900000 : 360000, 4000, 'tasks to finish');
 for (const [name] of specs) check(finals[name].status === 'succeeded', `${name} succeeded (iteration ${finals[name].iteration}, $${finals[name].costUsd.toFixed(3)})`);
 if (!REAL) check(finals.beta.iteration === 2, 'beta needed a second iteration (failure fed back to the agent)');
+
+title('v0.5: diff, screenshots and preview health of a finished task');
+const d1 = toolJson(await call('get_attempt_diff', { project: 'demo', task: 'alpha', attempt: 1 }));
+check(d1.files.length >= 1 && d1.totals.added >= 1 && typeof d1.patch === 'string', `get_attempt_diff lists ${d1.files.length} changed file(s) with a patch`);
+const shotsRes = await waitFor(async () => { const r = await call('get_attempt_screenshots', { project: 'demo', task: 'alpha' }); return r.isError ? false : r; }, 60000, 3000, 'screenshots');
+check(shotsRes.content.filter((c) => c.type === 'image').length >= 1, 'get_attempt_screenshots returns images taken by Chromium in the task container');
+const shotMeta = JSON.parse(shotsRes.content[0].text);
+check(shotMeta.screenshots.pages.some((p) => p.httpStatus === 200), 'screenshots report the HTTP status of the page');
+const healthy = await waitFor(async () => { const t = toolJson(await call('get_task', { project: 'demo', task: 'alpha' })); return t.preview?.state === 'healthy' ? t : false; }, 60000, 3000, 'preview health');
+check(healthy.preview.state === 'healthy', 'get_task reports the preview as healthy');
 
 title('preview access control');
 const A = previewUrl('alpha', 'demo');

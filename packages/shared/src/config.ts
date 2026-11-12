@@ -114,7 +114,7 @@ export function parseRuntime(rt: unknown): Record<string, string> {
   return out;
 }
 
-const URL_PATH_RE = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?#\[\]]{0,300}$/;
+const URL_PATH_RE = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@%/?#[\]]{0,300}$/;
 /** `preview:` section: where the dev server answers its health check and which pages are photographed after each attempt. */
 export function parsePreview(pv: unknown): NonNullable<ProjectConfig['preview']> {
   if (typeof pv !== 'object' || !pv || Array.isArray(pv)) throw new Error('preview must be a mapping, for example { health: { path: "/health" }, screenshots: ["/", "/login"] }');

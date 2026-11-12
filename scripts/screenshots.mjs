@@ -34,10 +34,14 @@ const screens = [
   { name: 'task-history', path: taskPath('agent-analytics'), settle: 2500 },
   { name: 'task-attempt-link', path: `${taskPath('agent-analytics')}#attempt-12`, settle: 2500 },
   { name: 'task-limits', path: `${taskPath('agent-analytics')}#settings`, settle: 1500 },
+  { name: 'task-changes', path: `${taskPath('dark-mode')}#changes`, settle: 2500, full: true },
+  { name: 'task-attempt-shots', path: `${taskPath('dark-mode')}#attempt-2`, settle: 3000, full: true },
+  { name: 'task-shot-dialog', path: `${taskPath('dark-mode')}#attempt-2`, settle: 2500, run: async (page) => { await page.locator('img[src*="/shots/"]').first().click(); await page.waitForTimeout(1500); } },
+  { name: 'task-diff-file', path: `${taskPath('dark-mode')}#attempt-2`, settle: 2500, full: true, run: async (page) => { const b = page.getByRole('button', { name: /fake-output\.txt/ }).first(); if (await b.count()) { await b.click(); await page.waitForTimeout(1500); } } },
   { name: 'task-blocked', path: taskPath('node-26'), settle: 1000 },
   { name: 'task-stuck', path: taskPath('flaky-e2e'), settle: 1000 },
   { name: 'settings-claude', path: '/settings/claude' },
-  { name: 'settings-projects', path: '/settings/projects', settle: 800 },
+  { name: 'settings-projects', path: '/settings/projects', settle: 1500, full: true },
   { name: 'settings-chat', path: '/settings/chat' },
   { name: 'settings-domain', path: '/settings/domain' },
   { name: 'settings-updates', path: '/settings/updates' },
@@ -51,7 +55,7 @@ const screens = [
   { name: 'setup-chat', path: '/setup?step=chat', setup: true },
 ];
 const only = process.env.ONLY ? new RegExp(process.env.ONLY) : null;
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.BV_CHROMIUM || undefined, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
 const report = [];
 for (const scheme of ['dark', 'light']) {
   for (const [sizeName, viewport] of Object.entries(sizes)) {
@@ -67,9 +71,10 @@ for (const scheme of ['dark', 'light']) {
       if (s.setup) { await page.goto(setupLink); }
       await page.goto(s.path, { waitUntil: 'networkidle' });
       await page.waitForTimeout(s.settle ?? 500);
+      if (s.run) await s.run(page).catch((e) => errors.push(`run: ${String(e).slice(0, 120)}`));
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       const file = `${out}/${s.name}-${sizeName}-${scheme}.png`;
-      await page.screenshot({ path: file, fullPage: sizeName === 'mobile' });
+      await page.screenshot({ path: file, fullPage: sizeName === 'mobile' || !!s.full });
       report.push(`${path.basename(file)} overflow=${overflow}${errors.length ? ` console=${JSON.stringify(errors)}` : ''}`);
       await ctx.close();
     }
