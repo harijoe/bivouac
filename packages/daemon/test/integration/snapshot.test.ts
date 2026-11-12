@@ -74,7 +74,7 @@ describe('task start-up time with and without an environment snapshot (real Dock
     expect(A.snapshot).toContain('snapshot_created');
     const B = await timed('b-snapshot');
     expect(B.status).toBe('succeeded');
-    expect(B.snapshot).toEqual(['snapshot_restored']);
+    expect(B.snapshot).toEqual(['snapshot_restored']); // not discarded: setup ran fine on top of the restored files
     // what v0.4 did for the third task: no snapshot, same caches otherwise
     for (const s of store.listSnapshots(1)) { await mgr.removeSnapshotFile('bench', s.fingerprint); store.deleteSnapshot(s.id); }
     const C = await timed('c-no-snapshot');

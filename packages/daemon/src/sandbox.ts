@@ -108,7 +108,12 @@ abstract class HostWorkspace {
   async snapshotRestore(fp: string) {
     const repo = this.safe('repo');
     if (!existsSync(path.join(repo, '.git'))) return false;
-    if (await extractArchive(this.snapDir, fp, repo)) return true;
+    if (await extractArchive(this.snapDir, fp, repo)) {
+      // root (production) restores the owners recorded in the archive; a non-root daemon (dev, CI) owns what it extracted, so the
+      // container user would not be able to write there: open the permissions as for the rest of the workspace
+      if (typeof process.getuid === 'function' && process.getuid() !== 0) chownTree(repo, this.uid);
+      return true;
+    }
     await this.cleanIgnored();
     return false;
   }
