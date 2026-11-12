@@ -44,7 +44,7 @@ const STABLE_MS = num(process.env.BIVOUAC_STABLE_MS, 60_000); // healthy for thi
 let child = null;
 let stopping = false;
 let lastMtime = 0;
-let lastReq = 0;
+let lastReq = existsSync(RESTART_REQ) ? statSync(RESTART_REQ).mtimeMs : 0;
 let conf = null;
 let restartTimer = null;
 const h = { state: 'unknown', since: new Date().toISOString(), lastHealthyAt: null, restarts: 0, cause: null, nextRetryAt: null };
@@ -147,7 +147,7 @@ setInterval(async () => {
   // restart requested from the dashboard or by the agent (touch .bivouac/restart.req)
   if (existsSync(RESTART_REQ)) {
     const r = statSync(RESTART_REQ).mtimeMs;
-    if (r !== lastReq) { if (lastReq) { say('restart requested'); await restartNow('restarted on request'); } lastReq = r; }
+    if (r !== lastReq) { lastReq = r; say('restart requested'); await restartNow('restarted on request'); }
   }
 }, 1000);
 

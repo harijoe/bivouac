@@ -64,8 +64,6 @@ describe('supervisor health', () => {
     expect(h.restarts).toBe(0);
     const pid = h.pid;
     writeFileSync(path.join(s.dir, 'restart.req'), '1');
-    await new Promise((r) => setTimeout(r, 1200));
-    writeFileSync(path.join(s.dir, 'restart.req'), '2');
     const again = await s.until((x) => x.state === 'healthy' && x.pid !== pid);
     expect(again.pid).not.toBe(pid);
   });
