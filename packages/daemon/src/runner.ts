@@ -9,6 +9,7 @@ import type { Sandbox } from './sandbox.js';
 import type { Project } from '@bivouac/shared';
 import { claudeEnv, resolveClaude } from './accounts.js';
 import { ServiceWatch } from './service-watch.js';
+import { Shots } from './shots.js';
 import { describeRuntime, detectRuntime, miseConfig, RUNTIME_FILES, runtimeKey, type RuntimeSpec } from './runtime.js';
 
 export type SandboxFactory = (task: Task) => Sandbox;
@@ -25,7 +26,9 @@ const addUsage = (a: Usage, b: Usage): Usage => ({
 
 export class TaskManager {
   private active = new Map<number, Active>();
+  readonly shots: Shots;
   constructor(private store: Store, private cfg: DaemonConfig, private makeSandbox: SandboxFactory, private repoToken: RepoTokenProvider = async (p) => store.getProjectToken(p.id), private fetchImpl?: typeof fetch) {
+    this.shots = new Shots(store, cfg.dataDir);
     store.previewUrlFor = (project, name, portName) => previewUrl(cfg, project, name, portName);
     store.aliasUrlFor = (alias, portName) => aliasUrl(cfg, alias, portName);
   }
@@ -118,6 +121,7 @@ export class TaskManager {
     }
     await this.stop(id).catch(() => {});
     await this.makeSandbox(t).destroy();
+    this.shots.purge(id);
     this.store.deleteTask(id);
   }
 
@@ -313,6 +317,7 @@ export class TaskManager {
       const blocked = await this.takeBlocked(sb);
       if (blocked) {
         this.store.addEvent(id, 'system', { subtype: 'blocked', reason: blocked });
+        await this.captureShots(id, a, sb, eff, task, iteration, null);
         return void this.store.setStatus(id, 'blocked', blocked);
       }
 
@@ -323,6 +328,7 @@ export class TaskManager {
       const output = s.end();
       if (a.stop) return this.finishStopped(id);
       this.store.addEvent(id, 'check', { command: successCmd, exitCode: code, output: truncateOutput(output, 20000) });
+      await this.captureShots(id, a, sb, eff, task, iteration, code === 0);
       if (code === 0) return void this.store.setStatus(id, 'succeeded');
       failure = { output, exitCode: code };
       // same failure, same code as the previous attempt: another attempt would burn tokens for nothing
@@ -340,6 +346,16 @@ export class TaskManager {
     } finally {
       if (open !== null) await this.markAttempt(id, sb, open, 'end');
     }
+  }
+
+  /** Photographs the preview at the end of an attempt. Bounded in time, and a failure only shows up in the history. */
+  private async captureShots(id: number, a: Active, sb: Sandbox, eff: ProjectConfig, task: Task, attempt: number, checkPassed: boolean | null) {
+    if (a.stop) return;
+    // unit tests have no browser: they opt in with BIVOUAC_SHOT_SCRIPT
+    if (this.cfg.testMode && !process.env.BIVOUAC_SHOT_SCRIPT) return;
+    const t = this.store.getTask(id) ?? task;
+    const r = await this.shots.capture(t, sb, eff, attempt, checkPassed, a.abort.signal).catch((e) => ({ ok: false, count: 0, problems: 0, message: String(e?.message ?? e) }));
+    this.store.addEvent(id, 'system', { subtype: 'screenshots', ok: r.ok, count: r.count, problems: r.problems, message: r.message }, attempt);
   }
 
   /** Records the state of the repository at the start / end of an attempt, for the per-attempt diff. Never fails an attempt. */

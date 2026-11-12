@@ -9,7 +9,13 @@ const WRITE: Ann = { readOnlyHint: false, destructiveHint: false, idempotentHint
 const DESTRUCTIVE: Ann = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
 const EXTERNAL: Ann = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
 
-const ok = (obj: unknown) => ({ content: [{ type: 'text' as const, text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] });
+/** A tool result that carries images (screenshots) next to its JSON. */
+class WithImages { constructor(public data: unknown, public images: { data: string; mimeType: string }[]) {} }
+const ok = (obj: unknown) => {
+  const text = (o: unknown) => ({ type: 'text' as const, text: typeof o === 'string' ? o : JSON.stringify(o, null, 2) });
+  if (obj instanceof WithImages) return { content: [text(obj.data), ...obj.images.map((i) => ({ type: 'image' as const, data: i.data, mimeType: i.mimeType }))] };
+  return { content: [text(obj)] };
+};
 const fail = (text: string) => ({ isError: true, content: [{ type: 'text' as const, text }] });
 
 const LIMIT_PARAMS = {
@@ -45,9 +51,16 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
       return svc.store.listTasks(p?.id).filter((t) => !a.status || t.status === a.status).map((t) => svc.summary(t));
     });
 
-  tool('get_task', 'Get task details', 'Get one task: status, iteration, cost (costKind says whether it is a real cost or an API-equivalent estimate on a subscription), the reason when blocked or stuck (error), the last messages from the agent (summarised), the result of the last success check, the preview URL, the dashboard link, the PR link and active share links, and a summary per attempt (newest first, 10 by default: start time, duration, cost, result of the success check, beginning of the last agent message, what triggered it). For a long task pass attempts_before (the attemptsNextBefore of the previous answer) to read older attempts. Poll this after create_task until the status is final.', READ,
+  tool('get_task', 'Get task details', 'Get one task: status, iteration, cost (costKind says whether it is a real cost or an API-equivalent estimate on a subscription), the reason when blocked or stuck (error), the last messages from the agent (summarised), the result of the last success check, the preview URL, the dashboard link, the PR link and active share links, and a summary per attempt (newest first, 10 by default: start time, duration, cost, result of the success check, beginning of the last agent message, what triggered it). For a long task pass attempts_before (the attemptsNextBefore of the previous answer) to read older attempts. The result also carries the screenshots of the last attempt as images (375 px and 1280 px wide, compressed, at most 4) with their problems (HTTP status, console errors, failed requests, blank page); ask get_attempt_screenshots for another attempt or for full-size images. Poll this after create_task until the status is final.', READ,
     { project: PROJECT, task: TASK, attempts_limit: z.number().int().min(1).max(50).optional().describe('How many attempts to list (default 10, newest first).'), attempts_before: z.number().int().positive().optional().describe('Pagination: list attempts older than this attempt number (use attemptsNextBefore from the previous answer).') },
-    (a) => svc.describeTask(svc.resolveTask(a.project, a.task), { attemptsBefore: a.attempts_before, attemptsLimit: a.attempts_limit }));
+    async (a) => {
+      const t = svc.resolveTask(a.project, a.task);
+      const d = await svc.describeTask(t, { attemptsBefore: a.attempts_before, attemptsLimit: a.attempts_limit });
+      const [latest] = svc.shotsOf(t, { limit: 1 });
+      if (!latest) return d;
+      const { images, listed } = svc.mcpShots(t, latest);
+      return new WithImages({ ...d, screenshots: listed }, images);
+    });
 
   tool('get_attempt_diff', 'Get what an attempt changed', 'Read what one attempt of a task changed: the list of files with +added/-deleted lines and the commits the agent made, or the patch itself, a window of lines at a time. Includes changes the agent did not commit. `attempt` is a number (see the attempts in get_task, each with its `changes`) or "base" for everything the task changed compared with its base branch. Without `file` the patch of all files is returned file after file; pass `file` for one file. When `truncated` is true, ask again with offset = nextOffset to read on.', READ,
     { project: PROJECT, task: TASK, attempt: z.union([z.number().int().positive(), z.literal('base')]).describe('Attempt number, or "base" for the whole task against its base branch.'),
@@ -99,6 +112,18 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
   tool('update_task', 'Change the limits of a task', 'Change the budget (max_cost_usd), the maximum number of attempts (max_iterations), the token limit (max_tokens) and/or the success command of an existing task, without recreating it. The new values apply from the next attempt (an attempt that is already running keeps its cap). To continue a task that stopped on its budget, prefer resume_task with a higher max_cost_usd. Values are totals for the whole task, not increments: a task that has spent $18 of $20 needs max_cost_usd above 18, for example 30.', WRITE,
     { project: PROJECT, task: TASK, ...LIMIT_PARAMS },
     (a) => svc.summary(svc.updateTaskLimits(svc.resolveTask(a.project, a.task), { maxCostUsd: a.max_cost_usd, maxIterations: a.max_iterations, maxTokens: a.max_tokens, successCommand: a.success_command }, actor)));
+
+  tool('get_attempt_screenshots', 'Get the screenshots of an attempt', 'Photographs of the preview taken at the end of an attempt (pages listed under preview.screenshots in bivouac.yml, default "/"), as images, each with its HTTP status, page title, browser console errors, failed requests and whether the page is blank or shows an error. Use it to check the result visually instead of asking the user. Default: the last attempt that has screenshots, compressed images (375 px = phone, 1280 px = laptop). Pass variant "full" for the full-size page (at most 4 images, larger). Old attempts are kept for a limited time.', READ,
+    { project: PROJECT, task: TASK, attempt: z.number().int().positive().optional().describe('Attempt number (default: the last one with screenshots).'),
+      width: z.union([z.literal(375), z.literal(1280)]).optional().describe('Only this width: 375 (phone) or 1280 (laptop). Default: both.'),
+      variant: z.enum(['compressed', 'full']).default('compressed').describe('"compressed" (default, small) or "full" (full-size page).') },
+    (a) => {
+      const t = svc.resolveTask(a.project, a.task);
+      const [att] = svc.shotsOf(t, a.attempt !== undefined ? { attempt: a.attempt } : { limit: 1 });
+      if (!att) throw new UserError(a.attempt !== undefined ? `No screenshots for attempt ${a.attempt}: it was not photographed, or its screenshots were removed to keep the storage bounded (only the newest attempts are kept).` : 'This task has no screenshots yet: they are taken at the end of each attempt, when the dev server answers.', 'no_shots', 404);
+      const { images, listed } = svc.mcpShots(t, att, { width: a.width, full: a.variant === 'full' });
+      return new WithImages({ attempt: att.attempt, checkPassed: att.checkPassed, captureError: att.error, screenshots: listed }, images);
+    });
 
   tool('restart_preview', 'Restart the dev server of a task', 'Restart the dev server (the preview) of a running task now, for example when get_task shows preview.state "down" or "unhealthy". bivouac already restarts a crashed dev server by itself with a growing delay and gives up after 8 tries; this starts it again from scratch.', WRITE,
     { project: PROJECT, task: TASK },

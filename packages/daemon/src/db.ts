@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS idempotency (
 CREATE TABLE IF NOT EXISTS claude_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE, kind TEXT NOT NULL, secret_enc TEXT NOT NULL,
   connected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), is_default INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS shots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, attempt INTEGER NOT NULL,
+  page TEXT NOT NULL, width INTEGER NOT NULL, http_status INTEGER, title TEXT, ok INTEGER NOT NULL, blank INTEGER NOT NULL DEFAULT 0,
+  problems_json TEXT NOT NULL DEFAULT '[]', console_json TEXT NOT NULL DEFAULT '[]', failed_json TEXT NOT NULL DEFAULT '[]',
+  bytes INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
+CREATE INDEX IF NOT EXISTS shots_task ON shots(task_id, attempt);
+CREATE TABLE IF NOT EXISTS shot_runs (
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, attempt INTEGER NOT NULL, check_passed INTEGER, error TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), PRIMARY KEY (task_id, attempt));
 CREATE TABLE IF NOT EXISTS notices (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, text TEXT NOT NULL,
   consumed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));

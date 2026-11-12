@@ -1,4 +1,4 @@
-import type { AttemptDiff, DiffPatch } from '@bivouac/shared';
+import type { AttemptDiff, AttemptShots, DiffPatch } from '@bivouac/shared';
 import { mergeConfig, parseProjectConfig, slugify, titleFromPrompt, validateTaskName, type Project, type Task } from '@bivouac/shared';
 import type { DaemonConfig } from './config.js';
 import { baseUrl } from './config.js';
@@ -476,6 +476,31 @@ export class Service {
     await this.pwatch.restart(t);
     this.auth.audit(actor.label, 'preview_restarted', { task: t.name, project: t.projectName });
     return this.store.getTask(t.id)!;
+  }
+
+  // ---- screenshots
+  /** Captures of the newest attempts of a task (newest first), or of one attempt. */
+  shotsOf(t: Task, o: { attempt?: number; limit?: number } = {}) { return this.mgr.shots.list(t.id, o); }
+  /** Screenshots as MCP images (a few, compressed) plus their metadata, for assistants that cannot open the dashboard. */
+  mcpShots(t: Task, att: AttemptShots, o: { width?: number; full?: boolean } = {}) {
+    const MAX_IMAGES = 4, MAX_BYTES = o.full ? 1_500_000 : 500_000;
+    const images: { data: string; mimeType: string }[] = [];
+    let total = 0;
+    const listed = att.shots.filter((s) => !o.width || s.width === o.width).map((s) => {
+      let image: string | null = null;
+      if (images.length < MAX_IMAGES) {
+        const buf = this.mgr.shots.image(t.id, s.id, o.full ? 'full' : 'small');
+        if (buf && total + buf.length <= MAX_BYTES) { images.push({ data: buf.toString('base64'), mimeType: 'image/jpeg' }); total += buf.length; image = `image ${images.length}`; }
+        else image = buf ? 'not attached (too large: ask for a single width or open the dashboard)' : null;
+      } else image = 'not attached (limit of 4 images: ask for a single width)';
+      return { page: s.page, width: s.width, httpStatus: s.httpStatus, title: s.title, ok: s.ok, blank: s.blank, problems: s.problems.map((p) => p.message), consoleErrors: s.consoleErrors, failedRequests: s.failedRequests, image };
+    });
+    return { images, listed: { attempt: att.attempt, checkPassed: att.checkPassed, captureError: att.error, pages: listed } };
+  }
+  shotImage(t: Task, id: number, variant: 'small' | 'full') {
+    const img = this.mgr.shots.image(t.id, id, variant);
+    if (!img) throw new UserError('This screenshot does not exist (anymore): old captures are removed to keep the storage bounded.', 'unknown_shot', 404);
+    return img;
   }
 
   // ---- diffs

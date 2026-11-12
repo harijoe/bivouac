@@ -132,6 +132,12 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     return c.json(svc.attemptsPage(taskOf(c), { before: c.req.query('before') ? Number(c.req.query('before')) : undefined, limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined, only }));
   }));
   app.get('/api/tasks/:id/attempts/:n/events', run((c) => c.json(svc.attemptEvents(taskOf(c), Number(param(c, 'n'))))));
+  // screenshots of the preview after each attempt
+  app.get('/api/tasks/:id/shots', run((c) => c.json(svc.shotsOf(taskOf(c), { attempt: c.req.query('attempt') ? Number(c.req.query('attempt')) : undefined, limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined }))));
+  app.get('/api/tasks/:id/shots/:shot/image', run((c) => {
+    const img = svc.shotImage(taskOf(c), Number(param(c, 'shot')), c.req.query('variant') === 'small' ? 'small' : 'full');
+    return c.body(new Uint8Array(img), 200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=86400, immutable' });
+  }));
   // what an attempt changed (`which` = attempt number or `base`)
   const which = (c: C): number | 'base' => (param(c, 'which') === 'base' ? 'base' : Number(param(c, 'which')));
   app.get('/api/tasks/:id/diff/:which', run(async (c) => c.json(await svc.attemptDiff(taskOf(c), which(c)))));
