@@ -45,7 +45,13 @@ async function timed(name: string) {
   const done = store.getTask(t.id)!;
   const ev = store.listEvents(t.id);
   const at = (f: (e: (typeof ev)[number]) => boolean) => { const e = ev.find(f); return e ? (Date.parse(e.createdAt) - t0) / 1000 : null; };
-  const health = JSON.parse((await mgr.sandboxFor(done).readFile('.bivouac/health.json')) ?? '{}');
+  // the task can finish before the dev server has booted: wait for the supervisor to report it healthy
+  let health: any = {};
+  for (let i = 0; i < 120; i++) {
+    health = JSON.parse((await mgr.sandboxFor(done).readFile('.bivouac/health.json')) ?? '{}');
+    if (health.state === 'healthy') break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
   const setupStart = at((e) => e.data?.subtype === 'setup');
   return {
     task: name, status: done.status, attempts: done.iteration,
@@ -53,6 +59,9 @@ async function timed(name: string) {
     previewAvailableS: health.lastHealthyAt ? (Date.parse(health.lastHealthyAt) - t0) / 1000 : null,
     setupStartS: setupStart, snapshot: ev.filter((e) => String(e.data?.subtype).startsWith('snapshot')).map((e) => e.data.subtype as string),
     snapshotMs: ev.find((e) => e.data?.subtype === 'snapshot_restored')?.data.ms ?? null,
+    snapshotBytes: store.listSnapshots(1)[0]?.bytes ?? null,
+    devLog: ((await mgr.sandboxFor(done).readFile('.bivouac/dev.log')) ?? '').split('\n').slice(-12).join('\n'),
+    health: health.state ?? null,
   };
 }
 
@@ -68,7 +77,7 @@ describe('task start-up time with and without an environment snapshot (real Dock
     for (const s of store.listSnapshots(1)) { await mgr.removeSnapshotFile('bench', s.fingerprint); store.deleteSnapshot(s.id); }
     const C = await timed('c-no-snapshot');
     expect(C.status).toBe('succeeded');
-    const out = { image: IMAGE, project: 'examples/node-postgres (pnpm 10, express, vite, react, typescript, eslint + postgres:16-alpine)', A, B, C };
+    const out = { image: IMAGE, project: 'examples/node-postgres (pnpm 10, ~800 packages: next, react, vite, vitest, storybook, drizzle, eslint… + postgres:16-alpine)', A, B, C };
     console.log(JSON.stringify(out, null, 2));
     writeFileSync(process.env.BIVOUAC_BENCH_OUT ?? '/tmp/bivouac-bench-snapshot.json', JSON.stringify(out, null, 2));
     expect(B.agentReadyS!).toBeLessThan(C.agentReadyS!);

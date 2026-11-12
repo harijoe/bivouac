@@ -1,0 +1,46 @@
+{
+  "image": "bivouac-dev-task:test",
+  "project": "examples/node-postgres (pnpm 10, ~800 packages: next, react, vite, vitest, storybook, drizzle, eslint\u2026 + postgres:16-alpine)",
+  "A": {
+    "task": "a-first",
+    "status": "succeeded",
+    "attempts": 4,
+    "agentReadyS": 15.798,
+    "previewAvailableS": 17.207,
+    "setupStartS": 2.401,
+    "snapshot": [
+      "snapshot_created"
+    ],
+    "snapshotMs": null,
+    "snapshotBytes": 793303040,
+    "health": "healthy"
+  },
+  "B": {
+    "task": "b-snapshot",
+    "status": "succeeded",
+    "attempts": 4,
+    "agentReadyS": 5.03,
+    "previewAvailableS": 6.301,
+    "setupStartS": 3.766,
+    "snapshot": [
+      "snapshot_restored"
+    ],
+    "snapshotMs": 2820,
+    "snapshotBytes": 793303040,
+    "health": "healthy"
+  },
+  "C": {
+    "task": "c-no-snapshot",
+    "status": "succeeded",
+    "attempts": 1,
+    "agentReadyS": 16.148,
+    "previewAvailableS": 16.692,
+    "setupStartS": 1.251,
+    "snapshot": [
+      "snapshot_created"
+    ],
+    "snapshotMs": null,
+    "snapshotBytes": 793303040,
+    "health": "healthy"
+  }
+}

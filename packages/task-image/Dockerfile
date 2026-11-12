@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-cer
     && npm cache clean --force
 # Screenshots: after each attempt shot.mjs opens the preview pages in headless Chromium (Debian's, with fonts) through playwright-core,
 # which is only the driver (no browser download).
-RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-liberation fonts-noto-color-emoji \
+RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/bivouac && npm install --prefix /opt/bivouac --no-audit --no-fund --omit=dev playwright-core@1.65.0 && npm cache clean --force
 ENV BIVOUAC_CHROMIUM=/usr/bin/chromium

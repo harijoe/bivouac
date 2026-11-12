@@ -15,7 +15,7 @@ afterEach(() => { sup?.kill('SIGKILL'); sup = null; });
 async function setup(command: string, extra: Record<string, unknown> = {}, env: Record<string, string> = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'bv-sup-'));
   const port = await freePort();
-  sup = spawn('node', [SUPERVISOR], { env: { ...process.env, BIVOUAC_STATE_DIR: dir, BIVOUAC_HEALTH_INTERVAL_MS: '100', BIVOUAC_BACKOFF_UNIT_MS: '10', ...env }, stdio: 'ignore' });
+  sup = spawn('node', [SUPERVISOR], { env: { ...process.env, BIVOUAC_STATE_DIR: dir, BIVOUAC_HEALTH_INTERVAL_MS: '100', BIVOUAC_BACKOFF_UNIT_MS: '10', BIVOUAC_HUNG_MS: '700', ...env }, stdio: 'ignore' });
   writeFileSync(path.join(dir, 'dev.json'), JSON.stringify({ command, port, cwd: dir, ...extra }));
   const health = () => (existsSync(path.join(dir, 'health.json')) ? JSON.parse(readFileSync(path.join(dir, 'health.json'), 'utf8')) : null);
   const until = async (fn: (h: any) => boolean, ms = 15000) => {

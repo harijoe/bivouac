@@ -3,7 +3,7 @@
 //   node dev/demo-server.mjs   → prints the session cookie to use (also served at /__demo/cookie)
 import { execSync } from 'node:child_process';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { serve } from '@hono/node-server';
@@ -116,6 +116,39 @@ if (first) {
     const L = ['\x1b[36mVITE\x1b[0m v6.0.1  ready in \x1b[1m312\x1b[0m ms', '  \x1b[32m➜\x1b[0m  Local:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[0m/', '\x1b[33mwarn\x1b[0m  deprecated option "foo"', '\x1b[31mError:\x1b[0m connect ECONNREFUSED postgres:5432', ...Array.from({ length: 400 }, (_, i) => `request GET /api/items?page=${i} 200 ${10 + (i % 40)}ms`)];
     wf(path.join(ws, '.bivouac/dev.log'), L.map((l, i) => `10:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.${String(i * 7 % 1000).padStart(3, '0')} ${l}`).join('\n') + '\n');
   }
+}
+
+// v0.5: preview health, screenshots with problems, an alias and environment snapshots (the fake agent runs in the background: wait for it)
+for (const t of store.listTasks()) await ctx.mgr.settled(t.id).catch(() => {});
+{
+  const now = Date.now(), iso = (msAgo) => new Date(now - msAgo).toISOString();
+  const byName = (n) => store.getTaskByName(p.id, n);
+  const dm = byName('dark-mode'), co = byName('checkout-fix'), v6 = byName('vite-6');
+  if (dm) store.setPreview(dm.id, { state: 'unhealthy', since: iso(95_000), lastHealthyAt: iso(400_000), restarts: 3, cause: 'the dev server exited (code 1); last output: Error: listen EADDRINUSE: address already in use :::5173', nextRetryAt: new Date(now + 24_000).toISOString(), updatedAt: iso(1000) });
+  if (co) store.setPreview(co.id, { state: 'healthy', since: iso(3_600_000), lastHealthyAt: iso(2000), restarts: 2, cause: 'the dev server stopped answering on port 5173 (/health)', nextRetryAt: null, updatedAt: iso(1000) });
+  if (v6) store.setPreview(v6.id, { state: 'down', since: iso(1_800_000), lastHealthyAt: iso(2_400_000), restarts: 8, cause: 'the dev server exited (code 127); last output: sh: 1: vite: not found', nextRetryAt: null, updatedAt: iso(1000) });
+  if (dm) {
+    const fx = path.join(import.meta.dirname, 'demo-shots');
+    const pages = [['/', 0], ['/settings', 1], ['/checkout', 2]];
+    const insShot = store.db.prepare('INSERT INTO shots(task_id,attempt,page,width,http_status,title,ok,blank,problems_json,console_json,failed_json,bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)');
+    const titles = ['Dashboard', 'Settings', 'Checkout'];
+    for (const attempt of [1, 2]) {
+      store.db.prepare('INSERT OR REPLACE INTO shot_runs(task_id,attempt,check_passed,error) VALUES(?,?,?,NULL)').run(dm.id, attempt, attempt === 2 ? 1 : 0);
+      for (const [page, i] of pages) for (const w of [375, 1280]) {
+        const bad = attempt === 1 && i === 2;
+        const problems = bad ? [{ kind: 'console', message: '1 error(s) in the browser console' }, { kind: 'request', message: '1 request(s) failed' }] : [];
+        const id = Number(insShot.run(dm.id, attempt, page, w, 200, titles[i], bad ? 0 : 1, 0, JSON.stringify(problems), JSON.stringify(bad ? ["TypeError: Cannot read properties of undefined (reading 'items')"] : []), JSON.stringify(bad ? [{ url: 'http://127.0.0.1:5173/api/cart', status: 404 }] : []), 1).lastInsertRowid);
+        const dir = path.join(dataDir, 'shots', `t${dm.id}`, `a${attempt}`);
+        mkdirSync(dir, { recursive: true });
+        if (existsSync(path.join(fx, `${i}-${w}.jpg`))) { copyFileSync(path.join(fx, `${i}-${w}.jpg`), path.join(dir, `${id}.jpg`)); copyFileSync(path.join(fx, `${i}-${w}-s.jpg`), path.join(dir, `${id}-s.jpg`)); }
+      }
+    }
+    store.setProjectAlias(p.id, { alias: 'app', taskId: dm.id, publicPaths: ['/api/webhooks/'] });
+  }
+  store.addSnapshot(p.id, 'a'.repeat(64), 412 * 1024 ** 2); store.addSnapshot(p.id, 'b'.repeat(64), 398 * 1024 ** 2);
+  store.db.prepare("UPDATE env_snapshots SET uses=7, created_at=?, last_used_at=? WHERE fingerprint=?").run(iso(5 * 86400_000), iso(3_600_000), 'a'.repeat(64));
+  store.db.prepare("UPDATE env_snapshots SET uses=2, created_at=?, last_used_at=? WHERE fingerprint=?").run(iso(12 * 86400_000), iso(4 * 86400_000), 'b'.repeat(64));
+  store.setLastFingerprint(p.id, 'a'.repeat(64));
 }
 ctx.svc.auth.audit('julien', 'login');
 const setupCode = ctx.auth.createSetupCode();

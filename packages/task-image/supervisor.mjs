@@ -38,7 +38,7 @@ const PROBE_MS = num(process.env.BIVOUAC_HEALTH_INTERVAL_MS, 5000);
 const BACKOFF = [1, 2, 4, 8, 15, 30, 60, 60].map((x) => x * num(process.env.BIVOUAC_BACKOFF_UNIT_MS, 1000));
 const MAX_RESTARTS = BACKOFF.length; // consecutive restarts without a healthy period, then it stays down
 const STARTUP_MS = num(process.env.BIVOUAC_STARTUP_MS, 240_000); // time a new process gets to answer for the first time
-const HUNG_PROBES = 6; // consecutive failed probes of a server that was healthy before it is killed
+const HUNG_MS = num(process.env.BIVOUAC_HUNG_MS, 30_000); // a server that was healthy and does not answer for this long is killed
 const STABLE_MS = num(process.env.BIVOUAC_STABLE_MS, 60_000); // healthy for this long: the restart counter is forgotten
 
 let child = null;
@@ -48,7 +48,7 @@ let lastReq = 0;
 let conf = null;
 let restartTimer = null;
 const h = { state: 'unknown', since: new Date().toISOString(), lastHealthyAt: null, restarts: 0, cause: null, nextRetryAt: null };
-let startedAt = 0, everHealthy = false, failedProbes = 0, healthySince = 0, recent = [];
+let startedAt = 0, everHealthy = false, failedProbes = 0, firstFail = 0, healthySince = 0, recent = [];
 
 function publish() {
   try {
@@ -151,9 +151,15 @@ setInterval(async () => {
   }
 }, 1000);
 
+let lastProbe = 0, probing = false;
+// A server that is not healthy yet (or not any more) is probed twice a second so that the preview is reported as soon as it
+// answers; a healthy one every PROBE_MS.
 setInterval(async () => {
-  if (stopping || !conf || !child) return;
-  const ok = await probe();
+  if (stopping || !conf || !child || probing) return;
+  if (h.state === 'healthy' && Date.now() - lastProbe < PROBE_MS) return;
+  lastProbe = Date.now(); probing = true;
+  let ok;
+  try { ok = await probe(); } finally { probing = false; }
   if (!child) return;
   if (ok) {
     failedProbes = 0;
@@ -166,7 +172,8 @@ setInterval(async () => {
   }
   failedProbes += 1;
   const neverAnswered = !everHealthy && Date.now() - startedAt > STARTUP_MS;
-  const hung = everHealthy && failedProbes >= HUNG_PROBES;
+  if (failedProbes === 1) firstFail = Date.now();
+  const hung = everHealthy && Date.now() - firstFail >= HUNG_MS;
   if (neverAnswered || hung) {
     const cause = neverAnswered ? `the dev server did not answer on port ${conf.health.port} within ${Math.round(STARTUP_MS / 1000)} s of starting` : `the dev server stopped answering on port ${conf.health.port}${conf.healthPath ? ` (${conf.healthPath})` : ''}`;
     say(`${cause}; killing it`);
@@ -174,7 +181,7 @@ setInterval(async () => {
     child = null;
     scheduleRestart(`${cause}${recent.length ? `; last output: ${recent.slice(-3).join(' | ')}` : ''}`);
   }
-}, PROBE_MS);
+}, Math.min(PROBE_MS, 500));
 setInterval(publish, 15_000).unref();
 
 for (const s of ['SIGTERM', 'SIGINT']) {
