@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+Fixes from a full review of 0.5.0 (details in `docs/review-v0.5.md`).
+
+### Security
+- The agent can no longer make bivouac run commands through the repository's `.git/config` (`core.fsmonitor`, clean filters, `textconv`, partial-clone commands) or send the push token to another server (`remote.origin.url`, `pushurl`, `insteadOf`): host-side git now works from a reduced configuration, a clean environment and the project's own URL.
+- Reading and writing files of a task workspace from the executor refuses symbolic links planted by the agent.
+- A share link's cookie only opens the task it was issued for (it kept working after an alias was moved to another task). Encoded separators (`%2f`, `%5c`, `\`) never match an alias public path.
+- The update status file is written without following links in a directory the web service owns. The sign-in redirect refuses `/\host`. Only an administrator can revoke an MCP client. Task containers have a process limit and no swap.
+
+### Fixed
+- Restart preview (button, MCP tool, `touch restart.req`) did nothing the first time.
+- Members of an allowed GitHub organisation or team could sign in but were sent back to the login page.
+- `install.sh` used to update now rolls back to the previous configuration when the new version is unhealthy, and a failed start (firewall, compose) rolls back instead of leaving bivouac stopped; a failed backup stops the update without changing anything.
+- `get_project_context` showed stale data for tasks with more than 5000 events and was slow with many tasks that have pull requests; its argument errors are now clear.
+- Deleting a task warns about commits made after a first push, and Open PR pushes again when the branch has new commits.
+- Task creation rejects invalid limits (negative or non-numeric tokens, fractional or huge attempts); `resume_task` on a running task no longer changes its limits before failing; a project named like a number can be addressed; `get_attempt_diff` against the base branch lists the commits; `send_instruction` on a task that ran out of budget says so.
+- A never-expiring share link no longer shows "expired" after 30 days of one visitor's cookie.
+- Renaming a task returns to its Settings tab; Sign out, the task card's Open preview and confirmation dialogs show a pending state and cannot be repeated or dismissed while they wait.
+- Two tasks finishing `setup` at the same time no longer collide on the snapshot file; multibyte characters are no longer corrupted at chunk boundaries in agent output and diffs; timers cannot crash the daemon with an unhandled rejection.
+
 ## 0.5.0
 
 Proof, diffs, a preview you can rely on, and fast task start-up.
