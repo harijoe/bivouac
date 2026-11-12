@@ -171,7 +171,7 @@ export class Service {
     return prs;
   }
   resolveProject(ref: string | number): Project {
-    const p = typeof ref === 'number' || /^\d+$/.test(String(ref)) ? this.store.getProject(Number(ref)) : this.store.getProjectByName(String(ref));
+    const p = typeof ref === 'number' ? this.store.getProject(ref) : this.store.getProjectByName(String(ref)) ?? (/^\d+$/.test(ref) ? this.store.getProject(Number(ref)) : null);
     if (!p) {
       const names = this.store.listProjects().map((x) => x.name).join(', ') || 'none yet';
       throw new UserError(`Unknown project "${ref}". Known projects: ${names}. Use list_projects to see them. New projects are added by the user in the dashboard.`, 'unknown_project', 404);
@@ -279,9 +279,12 @@ export class Service {
     const maxIterations = num(o.maxIterations, eff.budget?.max_iterations ?? 10);
     const maxCostUsd = num(o.maxCostUsd, eff.budget?.max_cost_usd ?? 20);
     if (![maxIterations, maxCostUsd].every((n) => Number.isFinite(n) && n > 0)) throw new UserError('maxIterations and maxCostUsd must be positive numbers.', 'invalid');
+    if (!Number.isInteger(maxIterations) || maxIterations > 1000) throw new UserError('maxIterations must be a whole number between 1 and 1000.', 'invalid');
+    const maxTokens = o.maxTokens === undefined || o.maxTokens === null || (o.maxTokens as unknown) === '' || o.maxTokens === 0 ? eff.budget?.max_tokens ?? null : Number(o.maxTokens);
+    if (maxTokens !== null && !(Number.isFinite(maxTokens) && maxTokens > 0)) throw new UserError('maxTokens must be a positive number.', 'invalid');
     const task = this.store.createTask({
       projectId: p.id, name: o.name, title: titleFromPrompt(prompt), prompt, successCommand: String(o.successCommand || eff.success || 'true'),
-      baseBranch, maxIterations, maxCostUsd, maxTokens: o.maxTokens ? Number(o.maxTokens) : eff.budget?.max_tokens ?? null,
+      baseBranch, maxIterations, maxCostUsd, maxTokens,
     }, (id) => `agent/t-${id}-${o.name}`);
     if (o.idempotencyKey) this.store.db.prepare('INSERT OR IGNORE INTO idempotency(key, project_id, task_id) VALUES (?,?,?)').run(o.idempotencyKey, p.id, task.id);
     this.auth.audit(actor.label, 'task_created', { project: p.name, task: o.name, id: task.id });
@@ -356,6 +359,7 @@ export class Service {
   async resumeTask(t: Task, actor: Actor, text?: string, limits: TaskLimits = {}) {
     this.assertAccepting();
     this.assertClaude(t.projectId);
+    if (this.mgr.isActive(t.id) || t.status === 'queued') throw new UserError('The task is already running. Use send_instruction to talk to the agent.', 'already_running', 409);
     const l = this.parseLimits(limits);
     // a task that stopped on its budget cannot do anything with a plain resume: say so, with the way out
     const why = this.exhausted(t, l);
@@ -367,7 +371,11 @@ export class Service {
   }
   async instruct(t: Task, text: string, actor: Actor) {
     if (!text.trim()) throw new UserError('text is required', 'invalid');
-    if (!this.mgr.isActive(t.id)) { this.assertAccepting(); this.assertClaude(t.projectId); }
+    if (!this.mgr.isActive(t.id)) {
+      this.assertAccepting(); this.assertClaude(t.projectId);
+      const why = this.exhausted(t, {});
+      if (why && t.status === 'budget_exceeded') throw new UserError(why, 'budget_exhausted', 409);
+    }
     this.auth.audit(actor.label, 'task_instruction', { task: t.name });
     return this.mgr.instruct(t.id, text.trim());
   }
@@ -546,7 +554,7 @@ export class Service {
   async attemptDiff(t: Task, which: number | 'base'): Promise<AttemptDiff> {
     const side = await this.diffSides(t, which);
     const sb = this.mgr.sandboxFor(t);
-    const sum = await sb.diffSummary(side.from, side.to, side.heads.from === `origin/${t.baseBranch}` ? undefined : side.heads);
+    const sum = await sb.diffSummary(side.from, side.to, side.heads);
     let uncommitted = false;
     if (side.heads.to) uncommitted = (await sb.diffSummary(side.heads.to, side.to).catch(() => null))?.totals.files ? true : false;
     return { ...sum, attempt: which, live: side.live, committed: sum.commits.length > 0, uncommitted, against: side.against };
