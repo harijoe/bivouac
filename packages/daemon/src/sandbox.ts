@@ -1,6 +1,6 @@
 import Dockerode from 'dockerode';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chownSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chownSync, closeSync, copyFileSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import { DEFAULT_SERVICE_CPUS, DEFAULT_SERVICE_MEMORY, type DiffPatch, type DiffSummary, type GitMark, type ServiceConfig } from '@bivouac/shared';
 import { chownTree, git, gitOk } from './git.js';
 import { diffPatch, diffSummary, markState } from './gitdiff.js';
-import { createArchive, extractArchive, removeArchive, snapshotPaths } from './snapshot.js';
+import { createArchive, extractArchive, removeArchive, snapshotFile, snapshotPaths } from './snapshot.js';
 
 export interface SandboxSpec {
   taskId: number;
@@ -108,12 +108,7 @@ abstract class HostWorkspace {
   async snapshotRestore(fp: string) {
     const repo = this.safe('repo');
     if (!existsSync(path.join(repo, '.git'))) return false;
-    if (await extractArchive(this.snapDir, fp, repo)) {
-      // root (production) restores the owners recorded in the archive; a non-root daemon (dev, CI) owns what it extracted, so the
-      // container user would not be able to write there: open the permissions as for the rest of the workspace
-      if (typeof process.getuid === 'function' && process.getuid() !== 0) chownTree(repo, this.uid);
-      return true;
-    }
+    if (await extractArchive(this.snapDir, fp, repo)) return true;
     await this.cleanIgnored();
     return false;
   }
@@ -307,6 +302,26 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
     }
     try { await this.docker.getNetwork(this.name).connect({ Container: this.opts.traefikContainer }); }
     catch (e: any) { if (!/already exists|No such container|not found|already/i.test(String(e?.message))) throw e; }
+  }
+
+  /**
+   * Unpacks the snapshot inside the task container, so every file belongs to the task user whatever user the daemon runs as
+   * (a host-side extraction by a non-root daemon leaves files the container user cannot chmod). The archive is hard-linked
+   * into the workspace for the duration of the extraction (copied when that is not possible).
+   */
+  async snapshotRestore(fp: string) {
+    const src = snapshotFile(this.snapDir, fp);
+    if (!existsSync(src) || !existsSync(path.join(this.hostWs, 'repo', '.git'))) return false;
+    const dst = path.join(this.hostWs, '.bivouac', 'restore.tar');
+    mkdirSync(path.dirname(dst), { recursive: true });
+    rmSync(dst, { force: true });
+    try { linkSync(src, dst); } catch { copyFileSync(src, dst); }
+    let code = 1;
+    try { code = await this.exec(['tar', '-xf', '/workspace/.bivouac/restore.tar', '-C', '/workspace/repo']); }
+    finally { rmSync(dst, { force: true }); }
+    if (code === 0) return true;
+    await this.cleanIgnored();
+    return false;
   }
 
   private svcName(n: string) { return `${this.name}-svc-${n}`; }

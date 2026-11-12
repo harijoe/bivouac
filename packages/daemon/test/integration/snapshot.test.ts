@@ -60,6 +60,8 @@ async function timed(name: string) {
     agentReadyS: at((e) => e.kind === 'status' && e.data.status === 'running'),
     previewAvailableS: health.lastHealthyAt ? (Date.parse(health.lastHealthyAt) - t0) / 1000 : null,
     setupStartS: setupStart, snapshot: ev.filter((e) => String(e.data?.subtype).startsWith('snapshot')).map((e) => e.data.subtype as string),
+    snapshotMessages: ev.filter((e) => String(e.data?.subtype).startsWith('snapshot')).map((e) => e.data.message as string),
+    setupOutput: ev.filter((e) => e.data?.subtype === 'output' && e.data?.label === 'setup').map((e) => String(e.data.text)).join('').slice(-1500),
     snapshotMs: ev.find((e) => e.data?.subtype === 'snapshot_restored')?.data.ms ?? null,
     snapshotBytes: store.listSnapshots(1)[0]?.bytes ?? null,
     devLog: ((await mgr.sandboxFor(done).readFile('.bivouac/dev.log')) ?? '').split('\n').slice(-12).join('\n'),
@@ -74,7 +76,7 @@ describe('task start-up time with and without an environment snapshot (real Dock
     expect(A.snapshot).toContain('snapshot_created');
     const B = await timed('b-snapshot');
     expect(B.status).toBe('succeeded');
-    expect(B.snapshot).toEqual(['snapshot_restored']); // not discarded: setup ran fine on top of the restored files
+    expect(B.snapshot, JSON.stringify([B.snapshotMessages, B.setupOutput])).toEqual(['snapshot_restored']); // not discarded: setup ran fine on top of the restored files
     // what v0.4 did for the third task: no snapshot, same caches otherwise
     for (const s of store.listSnapshots(1)) { await mgr.removeSnapshotFile('bench', s.fingerprint); store.deleteSnapshot(s.id); }
     const C = await timed('c-no-snapshot');
