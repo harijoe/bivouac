@@ -146,8 +146,13 @@ describe('project alias', () => {
     expect((await auth(ALIAS, '/api/webhooks/../admin')).status).toBe(403);
     // the task URL does not get those open paths
     expect((await auth(`login.demo.${DOM}`, '/api/webhooks/stripe')).status).toBe(403);
+    expect((await auth(ALIAS, '/api/webhooks/..%2f..%2fadmin')).status).toBe(403);
+    const shareTok = new URL(env.svc.createShareLink(env.store.getTask(t.id)!, '7d', admin).url).searchParams.get('bv_share')!;
+    const shared = cookieOf(await auth(ALIAS, `/?bv_share=${shareTok}`));
+    expect((await auth(ALIAS, '/x', shared)).status).toBe(200);
     // moving the alias: the old task loses it, the history says so
     env.svc.setAlias(p.id, { task: 'checkout' }, admin);
+    expect((await auth(ALIAS, '/x', shared)).status).toBe(403);
     expect(env.store.getTask(t.id)!.aliasUrl).toBeNull();
     expect(env.store.getTask(t2.id)!.aliasUrl).toBe(`https://app.${DOM}`);
     expect(env.store.listEvents(t.id).some((e) => e.data.subtype === 'alias_released')).toBe(true);

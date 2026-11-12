@@ -79,7 +79,7 @@ export class Previews {
     const body = Buffer.from(JSON.stringify(p)).toString('base64url');
     return `${body}.${createHmac('sha256', this.secret).update('preview:' + body).digest('base64url')}`;
   }
-  private verify(v: string, host: string): { p: CookiePayload } | { reason: 'expired' | 'revoked' | null } {
+  private verify(v: string, host: string, taskId: number): { p: CookiePayload } | { reason: 'expired' | 'revoked' | null } {
     const [body, mac] = v.split('.');
     if (!body || !mac) return { reason: null };
     if (!safeEqual(mac, createHmac('sha256', this.secret).update('preview:' + body).digest('base64url'))) return { reason: null };
@@ -88,8 +88,9 @@ export class Previews {
     if (p.h !== host) return { reason: null };
     if (p.k === 'share') {
       const s = p.s ? this.getShare(p.s) : null;
-      if (!s) return { reason: null };
+      if (!s || s.taskId !== taskId) return { reason: null };
       if (!s.active) return { reason: this.inactiveReason(s) };
+      if (s.expiresAt === null) return { p };
     }
     if (p.e < this.now()) return { reason: p.k === 'share' ? 'expired' : null };
     return { p };
@@ -139,7 +140,7 @@ export class Previews {
     const parts = cookieHeader.split(';').map((s) => s.trim()).filter(Boolean);
     const rest = parts.filter((p) => !p.startsWith(PREVIEW_COOKIE + '=')).join('; ');
     // paths the owner opened to the world on the project alias (webhooks, OAuth callbacks): no access check, no cookie to the app
-    if (task.alias && task.alias.publicPaths.some((pp) => (pp.endsWith('/') ? url.pathname.startsWith(pp) : url.pathname === pp))) return { kind: 'allow', cookieHeader: rest };
+    if (task.alias && !/%2[ef5]|%5c|\\|^\/\//i.test(uri.split('?')[0]) && task.alias.publicPaths.some((pp) => (pp.endsWith('/') ? url.pathname.startsWith(pp) : url.pathname === pp))) return { kind: 'allow', cookieHeader: rest };
     const ticket = url.searchParams.get('bv_ticket');
     const share = url.searchParams.get('bv_share');
     if (ticket || share) {
@@ -160,7 +161,7 @@ export class Previews {
     // 2. an existing preview cookie for this host
     const mine = parts.find((p) => p.startsWith(PREVIEW_COOKIE + '='));
     if (mine) {
-      const v = this.verify(mine.slice(PREVIEW_COOKIE.length + 1), host.toLowerCase());
+      const v = this.verify(mine.slice(PREVIEW_COOKIE.length + 1), host.toLowerCase(), task.id);
       // the app must never see our cookie: hand back the rest of the header for Traefik to forward
       if ('p' in v) return { kind: 'allow', cookieHeader: rest };
       if (v.reason) return { kind: 'deny', reason: v.reason };
