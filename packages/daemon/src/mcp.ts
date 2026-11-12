@@ -152,7 +152,9 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
   tool('get_project_context', 'Get the state of a project', 'Read-only snapshot of a project at this moment, to plan its next step with the user: repository and default branch, last commit, effective bivouac.yml, README and project notes (CLAUDE.md, AGENTS.md, PROGRESS.md, NOTES.md, docs/decisions.md, CHANGELOG.md), code structure (folders, languages, sizes, no file contents), recent commits, recent and running tasks (prompt, status, iterations, cost, branch, PR state, what the agent did, last verification) and known problems. About 10 000 tokens by default. ' +
     'Use `detail` for more on one part: "task:<task name>" (everything about a task), "doc:<path>" (a whole document), "tree" (deeper structure) or "commits" (60 commits). The repository is refreshed from GitHub at each call. Secrets are never included. After reading it, propose the next mission and start it with create_task.', READ,
     { project: PROJECT, detail: z.string().max(300).optional().describe('Optional: "task:<name>", "doc:<path>", "tree" or "commits". Leave empty for the overview.') },
-    async (a) => svc.pctx.snapshot(svc.resolveProject(a.project), a.detail));
+    async (a) => {
+      try { return await svc.pctx.snapshot(svc.resolveProject(a.project), a.detail); } catch (e: any) { if (e instanceof UserError) throw e; throw new UserError(String(e?.message ?? e)); }
+    });
 
   tool('read_project_file', 'Read a file of the repository', 'Read one file from the repository on the default branch (or another branch, tag or commit with `ref`), for example a source file mentioned in get_project_context. Read-only, at most 60 000 characters. Secrets, .env files and files ignored by git are refused.', READ,
     { project: PROJECT, path: z.string().max(500).describe('Path relative to the repository root, for example "src/index.ts".'), ref: z.string().max(200).optional().describe('Branch, tag or commit. Default: the default branch.') },
