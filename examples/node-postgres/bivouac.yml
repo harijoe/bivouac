@@ -1,0 +1,14 @@
+# A realistic Node + pnpm + Postgres project: dependencies installed with pnpm, a database migrated by `setup`, an API on port 3000.
+setup: pnpm install --frozen-lockfile && node scripts/migrate.mjs
+dev:
+  command: node server.mjs
+  port: 3000
+services:
+  postgres:
+    image: postgres:16-alpine
+    env: { POSTGRES_PASSWORD: dev, POSTGRES_DB: app }
+    volume: /var/lib/postgresql/data
+preview:
+  health: { path: /health }
+  screenshots: ["/"]
+success: node scripts/check.mjs
