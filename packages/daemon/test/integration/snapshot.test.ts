@@ -39,7 +39,7 @@ afterAll(async () => {
 
 async function timed(name: string) {
   const project = store.getProjectByName('bench') ?? store.createProject({ name: 'bench', repoUrl: remote, defaultBranch: 'main' });
-  const t = store.createTask({ projectId: project.id, name, title: name, prompt: 'make the check pass', successCommand: 'node scripts/check.mjs', baseBranch: 'main', maxIterations: 4, maxCostUsd: 5 }, (id) => `agent/t-${id}-${name}`);
+  const t = store.createTask({ projectId: project.id, name, title: name, prompt: 'make the check pass', successCommand: 'for i in $(seq 1 90); do node scripts/check.mjs && exit 0; sleep 1; done; exit 1', baseBranch: 'main', maxIterations: 4, maxCostUsd: 5 }, (id) => `agent/t-${id}-${name}`);
   created.push(t.id);
   const t0 = Date.now();
   mgr.enqueue(t.id);
