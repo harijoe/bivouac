@@ -47,7 +47,7 @@ export interface Sandbox {
   /** Clones the repository (the token never enters the container) and creates the task branch. Returns true when it cloned. */
   prepareRepo(o: PrepareOpts): Promise<boolean>;
   start(spec: SandboxSpec): Promise<void>;
-  push(o: { branch: string; token: string | null }): Promise<void>;
+  push(o: { branch: string; token: string | null; url: string }): Promise<void>;
   /** Commits that exist only locally. */
   unpushed(): Promise<number>;
   /** Hash of the repository content (committed or not, ignored files excluded): changes whenever the code changes. */
@@ -101,7 +101,7 @@ abstract class HostWorkspace {
   protected abstract snapDir: string;
   async snapshotCreate(fp: string, maxBytes?: number) {
     const repo = this.safe('repo');
-    const ls = await git(['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], { cwd: repo, uid: this.uid });
+    const ls = await git(['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], { cwd: repo, uid: this.uid, untrusted: true });
     if (ls.code !== 0) throw new Error(`git ls-files failed: ${ls.stderr.trim()}`);
     return createArchive(this.snapDir, fp, repo, snapshotPaths(ls.stdout.split('\0')), maxBytes);
   }
@@ -115,7 +115,7 @@ abstract class HostWorkspace {
   async snapshotDelete(fp: string) { removeArchive(this.snapDir, fp); }
   async cleanIgnored() {
     const repo = this.safe('repo');
-    if (existsSync(path.join(repo, '.git'))) await git(['clean', '-fdXq'], { cwd: repo, uid: this.uid });
+    if (existsSync(path.join(repo, '.git'))) await git(['clean', '-fdXq'], { cwd: repo, uid: this.uid, untrusted: true });
   }
   private safe(rel: string) {
     const p = path.resolve(this.hostWs, rel);
@@ -133,13 +133,13 @@ abstract class HostWorkspace {
   }
   async mark() {
     const repo = this.safe('repo');
-    return existsSync(path.join(repo, '.git')) ? markState({ cwd: repo, uid: this.uid }) : null;
+    return existsSync(path.join(repo, '.git')) ? markState({ cwd: repo, uid: this.uid, untrusted: true }) : null;
   }
   async diffSummary(from: string, to: string, heads?: { from: string | null; to: string | null }) {
-    return diffSummary({ cwd: this.safe('repo'), uid: this.uid }, from, to, heads);
+    return diffSummary({ cwd: this.safe('repo'), uid: this.uid, untrusted: true }, from, to, heads);
   }
   async diffPatch(from: string, to: string, paths: string[], offset: number, limit: number) {
-    return diffPatch({ cwd: this.safe('repo'), uid: this.uid }, from, to, paths, offset, limit);
+    return diffPatch({ cwd: this.safe('repo'), uid: this.uid, untrusted: true }, from, to, paths, offset, limit);
   }
   async tail(rel: string, o: { before?: number; after?: number; bytes?: number } = {}): Promise<TailWindow> {
     const p = this.safe(rel);
@@ -189,15 +189,15 @@ abstract class HostWorkspace {
     chownTree(this.hostWs, this.uid);
     return cloned;
   }
-  async push(o: { branch: string; token: string | null }) {
+  async push(o: { branch: string; token: string | null; url: string }) {
     // --no-verify: the repository's own git hooks (pre-push often calls tools the executor does not have, such as pnpm) are
     // not the executor's business. The repository's checks run in the task, as the success command.
-    await gitOk(['push', '--no-verify', '-u', 'origin', `${o.branch}:${o.branch}`], { cwd: this.safe('repo'), token: o.token, uid: this.uid });
+    await gitOk(['push', '--no-verify', '-u', 'origin', `${o.branch}:${o.branch}`], { cwd: this.safe('repo'), token: o.token, uid: this.uid, untrusted: true, url: o.url });
   }
   async unpushed() {
     const repo = this.safe('repo');
     if (!existsSync(repo)) return 0;
-    const r = await git(['rev-list', '--count', 'HEAD', '--not', '--remotes'], { cwd: repo });
+    const r = await git(['rev-list', '--count', 'HEAD', '--not', '--remotes'], { cwd: repo, uid: this.uid, untrusted: true });
     return r.code === 0 ? Number(r.stdout.trim()) : 0;
   }
   async fingerprint() {
@@ -207,9 +207,9 @@ abstract class HostWorkspace {
     const idx = path.join(tmpdir(), `bv-fp-${randomUUID()}`);
     const env = { GIT_INDEX_FILE: idx };
     try {
-      if ((await git(['read-tree', 'HEAD'], { cwd: repo, env, uid: this.uid })).code !== 0) return '';
-      await git(['add', '-A', '--', '.', ':!.bivouac'], { cwd: repo, env, uid: this.uid });
-      const r = await git(['write-tree'], { cwd: repo, env, uid: this.uid });
+      if ((await git(['read-tree', 'HEAD'], { cwd: repo, env, uid: this.uid, untrusted: true })).code !== 0) return '';
+      await git(['add', '-A', '--', '.', ':!.bivouac'], { cwd: repo, env, uid: this.uid, untrusted: true });
+      const r = await git(['write-tree'], { cwd: repo, env, uid: this.uid, untrusted: true });
       return r.code === 0 ? r.stdout.trim() : '';
     } finally { rmSync(idx, { force: true }); }
   }

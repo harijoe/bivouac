@@ -137,7 +137,7 @@ export class TaskManager {
     const t = this.store.getTask(id)!;
     const project = this.store.getProject(t.projectId)!;
     const token = await this.repoToken(project, 'write');
-    await this.makeSandbox(t).push({ branch: t.branch, token });
+    await this.makeSandbox(t).push({ branch: t.branch, token, url: project.repoUrl });
     this.store.patchTask(id, { pushed: true });
     this.store.addEvent(id, 'system', { subtype: 'push', branch: t.branch, repo: project.repoUrl });
   }

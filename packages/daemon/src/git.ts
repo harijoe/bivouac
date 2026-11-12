@@ -4,16 +4,39 @@ import path from 'node:path';
 
 export interface GitResult { code: number; stdout: string; stderr: string }
 
-/** Run git on the host. The token is injected as an HTTP header (never written to .git/config). */
-export function git(args: string[], o: { cwd?: string; token?: string | null; uid?: number; env?: Record<string, string> } = {}): Promise<GitResult> {
-  const pre = ['-c', 'safe.directory=*', '-c', 'credential.helper='];
+const HARDEN = ['-c', 'safe.directory=*', '-c', 'credential.helper=', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.pager=cat', '-c', 'core.sshCommand=', '-c', 'diff.external=', '-c', 'protocol.ext.allow=never'];
+const SAFE_CONFIG = /^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|symlinks|ignorecase|precomposeunicode)|user\.(name|email)|remote\..+\.(url|fetch)|branch\..+\.(remote|merge))$/;
+
+export interface GitOpts { cwd?: string; token?: string | null; uid?: number; env?: Record<string, string>; untrusted?: boolean; url?: string }
+
+async function sanitizeRepoConfig(repo: string, url?: string) {
+  const dir = path.join(repo, '.git');
+  const cfg = path.join(dir, 'config');
+  if (!lstatSync(dir).isDirectory() || !lstatSync(cfg).isFile()) throw new Error('unexpected repository layout');
+  const run = (args: string[]) => git(['config', '--file', cfg, ...args]);
+  const list = await run(['--name-only', '--list']);
+  if (list.code !== 0) throw new Error(`cannot read the repository configuration: ${list.stderr.trim()}`);
+  for (const key of new Set(list.stdout.split('\n').filter(Boolean))) if (!SAFE_CONFIG.test(key)) await run(['--unset-all', key]);
+  if (url) await run(['remote.origin.url', url]);
+}
+
+/** Run git on the host. The token is injected as an HTTP header (never written to .git/config). `untrusted` is for a repository the agent can write. */
+export async function git(args: string[], o: GitOpts = {}): Promise<GitResult> {
+  if (o.untrusted && o.cwd) {
+    try { await sanitizeRepoConfig(o.cwd, o.url); } catch (e) { return { code: 1, stdout: '', stderr: String((e as Error).message) }; }
+  }
+  const pre = [...HARDEN];
   if (o.token) pre.push('-c', `http.extraheader=Authorization: Basic ${Buffer.from(`x-access-token:${o.token}`).toString('base64')}`);
   const asRoot = typeof process.getuid === 'function' && process.getuid() === 0 && o.uid !== undefined;
+  const base: Record<string, string> = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: asRoot ? '/tmp' : (process.env.HOME ?? '/tmp') };
+  if (process.env.LANG) base.LANG = process.env.LANG;
   return new Promise((resolve) => {
     const p = spawn('git', [...pre, ...args], {
-      cwd: o.cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(asRoot ? { HOME: '/tmp' } : {}), ...o.env },
+      cwd: o.cwd, env: { ...base, GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1', ...(o.untrusted ? { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } : {}), ...o.env },
       ...(asRoot ? { uid: o.uid, gid: o.uid } : {}),
     });
+    p.stdout.setEncoding('utf8');
+    p.stderr.setEncoding('utf8');
     let stdout = '', stderr = '';
     p.stdout.on('data', (b) => (stdout += b));
     p.stderr.on('data', (b) => (stderr += b));
@@ -23,7 +46,7 @@ export function git(args: string[], o: { cwd?: string; token?: string | null; ui
 }
 const redact = (s: string, t?: string | null) => (t ? s.split(t).join('***') : s);
 
-export async function gitOk(args: string[], o: Parameters<typeof git>[1] = {}): Promise<string> {
+export async function gitOk(args: string[], o: GitOpts = {}): Promise<string> {
   const r = await git(args, o);
   if (r.code !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr.trim() || r.stdout.trim()}`);
   return r.stdout;

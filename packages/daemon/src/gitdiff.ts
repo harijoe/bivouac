@@ -12,7 +12,7 @@ export function checkRef(ref: string): string {
   return ref;
 }
 
-type GitOpts = { cwd: string; uid: number };
+type GitOpts = { cwd: string; uid: number; untrusted: true };
 const AUTHOR = { GIT_AUTHOR_NAME: 'bivouac', GIT_AUTHOR_EMAIL: 'bivouac@localhost', GIT_COMMITTER_NAME: 'bivouac', GIT_COMMITTER_EMAIL: 'bivouac@localhost' };
 
 /**
@@ -94,7 +94,7 @@ export async function diffPatch(o: GitOpts, from: string, to: string, paths: str
   checkRef(from); checkRef(to);
   const clean = paths.filter((p) => p && !p.includes('\0'));
   // no path: the whole diff, file after file
-  const r = await git(['diff', '--no-color', '-M', '-U3', '--no-ext-diff', from, to, ...(clean.length ? ['--', ...clean] : [])], o);
+  const r = await git(['diff', '--no-color', '-M', '-U3', '--no-ext-diff', '--no-textconv', from, to, ...(clean.length ? ['--', ...clean] : [])], o);
   if (r.code !== 0) throw new Error(`git diff failed: ${r.stderr.trim()}`);
   let text = r.stdout, cut = false;
   if (Buffer.byteLength(text) > MAX_PATCH_BYTES) { text = text.slice(0, MAX_PATCH_BYTES); cut = true; }

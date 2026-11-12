@@ -21,7 +21,7 @@ describe('push_branch', () => {
     execSync('git add -A && git -c user.name=t -c user.email=t@t commit -qm work', { cwd: repo });
     // sanity: without --no-verify the hook does block a plain push
     expect(() => execSync('git push origin agent/hooked:probe', { cwd: repo, stdio: 'pipe' })).toThrow();
-    await sb.push({ branch: 'agent/hooked', token: null });
+    await sb.push({ branch: 'agent/hooked', token: null, url: remote });
     expect(execSync('git branch --list agent/hooked', { cwd: remote }).toString()).toContain('agent/hooked');
   });
 
