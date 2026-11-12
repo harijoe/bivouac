@@ -112,6 +112,7 @@ EXEC_TOKEN="${PREV_EXEC_TOKEN:-$(openssl rand -hex 24)}"
 TASK_IMAGE="$REGISTRY/bivouac-task:$BV_VERSION"
 DAEMON_IMAGE="$REGISTRY/bivouac-daemon:$BV_VERSION"
 umask 077
+[ ! -f "$ENV_FILE" ] || cp -p "$ENV_FILE" "$ENV_FILE.prev"
 cat > "$ENV_FILE" <<EOT
 BIVOUAC_VERSION=$BV_VERSION
 BIVOUAC_EXECUTOR_TOKEN=$EXEC_TOKEN
@@ -143,8 +144,10 @@ docker image inspect "$DAEMON_IMAGE" >/dev/null 2>&1 || docker pull -q "$DAEMON_
 docker image inspect "$TASK_IMAGE" >/dev/null 2>&1 || docker pull -q "$TASK_IMAGE" >/dev/null || die "Cannot pull $TASK_IMAGE."
 
 # ---- configuration files, firewall, services, health check and rollback: one script shared with the dashboard updater
-docker run --rm --entrypoint cat "$DAEMON_IMAGE" /app/apply.sh > "$OPT/apply.sh" && chmod 755 "$OPT/apply.sh"
-docker run --rm --entrypoint cat "$DAEMON_IMAGE" /app/uninstall.sh > "$OPT/uninstall.sh" && chmod 755 "$OPT/uninstall.sh"
+for f in apply.sh uninstall.sh; do
+  docker run --rm --entrypoint cat "$DAEMON_IMAGE" "/app/$f" > "$OPT/$f.new" && [ -s "$OPT/$f.new" ] || die "Cannot read $f from $DAEMON_IMAGE."
+  chmod 755 "$OPT/$f.new"; mv -f "$OPT/$f.new" "$OPT/$f"
+done
 log "Starting bivouac"
 "$OPT/apply.sh" deploy || die "bivouac did not start correctly. See: docker logs bivouac-web (and $DATA/web/update-status.json)"
 

@@ -35,12 +35,12 @@ FROM_VERSION=""; TO_VERSION=""; STARTED="$(date -u +%FT%TZ)"
 write_status() { # state step error
   local state="$1" step="${2:-}" err="${3:-}"
   [ -d "$DATA/web" ] || return 0
-  local tmp="$STATUS.tmp"
+  local tmp; tmp="$(mktemp "$DATA/web/.status.XXXXXX")" || return 0
   jq -n --arg state "$state" --arg step "$step" --arg err "$err" --arg from "$FROM_VERSION" --arg to "$TO_VERSION" --arg started "$STARTED" \
         --arg finished "$([ "$state" = running ] && echo "" || date -u +%FT%TZ)" --argjson steps "$(printf '%s\n' "${STEPS[@]}" | jq -R . | jq -s .)" \
     '{state:$state, step:$step, steps:$steps, from:$from, to:$to, error:(if $err=="" then null else $err end), startedAt:$started, finishedAt:(if $finished=="" then null else $finished end)}' > "$tmp"
-  chown 1000:1000 "$tmp" 2>/dev/null || true
-  mv "$tmp" "$STATUS"
+  chmod 644 "$tmp"; chown 1000:1000 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$STATUS"
 }
 
 # The values also reach `docker compose` through the environment, where they win over the .env file:
@@ -217,8 +217,8 @@ backup() {
   mkdir -p "$dir"; chmod 700 "$BACKUPS" "$dir"
   # a graceful stop checkpoints the SQLite WAL, so the copied files are consistent
   docker stop -t 30 bivouac-web >/dev/null 2>&1 || true
-  [ -d "$DATA/web" ] && cp -a "$DATA/web" "$dir/web" && rm -f "$dir/web/update-status.json"
-  cp -a "$ENV_FILE" "$dir/bivouac.env"
+  if [ -d "$DATA/web" ]; then cp -a "$DATA/web" "$dir/web" || return 1; rm -f "$dir/web/update-status.json"; fi
+  if [ -f "$ENV_FILE.prev" ]; then cp -a "$ENV_FILE.prev" "$dir/bivouac.env" || return 1; else cp -a "$ENV_FILE" "$dir/bivouac.env" || return 1; fi
   [ -f "$OPT/docker-compose.yml" ] && cp -a "$OPT/docker-compose.yml" "$dir/docker-compose.yml"
   [ -f /etc/systemd/system/bivouac.service ] && cp -a /etc/systemd/system/bivouac.service "$dir/bivouac.service"
   ls -1d "$BACKUPS"/*/ 2>/dev/null | sort | head -n -"$KEEP_BACKUPS" | xargs -r rm -rf
@@ -241,7 +241,7 @@ pull_images() {
   for img in "$(env_get BIVOUAC_DAEMON_IMAGE)" "$(env_get BIVOUAC_TASK_IMAGE)"; do
     docker image inspect "$img" >/dev/null 2>&1 || docker pull -q "$img" >/dev/null || { warn "cannot pull $img"; return 1; }
   done
-  docker pull -q "$TRAEFIK_IMAGE" >/dev/null
+  docker image inspect "$TRAEFIK_IMAGE" >/dev/null 2>&1 || docker pull -q "$TRAEFIK_IMAGE" >/dev/null
 }
 
 restore() { # $1 = backup dir
@@ -267,7 +267,11 @@ deploy() {
   if [ "$previous" = 1 ]; then FROM_VERSION="$(docker exec bivouac-web printenv BIVOUAC_VERSION 2>/dev/null || docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' bivouac-web | sed -n 's/^BIVOUAC_VERSION=//p')"; fi
   write_status running backup
   local bdir=""
-  if [ "$previous" = 1 ]; then log "Backing up the database and the configuration"; bdir="$(backup)"; fi
+  if [ "$previous" = 1 ]; then
+    log "Backing up the database and the configuration"
+    bdir="$(backup)" || { ( cd "$OPT" && docker compose up -d >/dev/null 2>&1 ) || true; write_status failed backup "Could not back up the data. Nothing was changed."; exit 1; }
+  fi
+  rm -f "$ENV_FILE.prev"
   if [ -n "$NEW_VERSION" ]; then
     # only now: the backup above must hold the configuration of the version that is running
     local registry; registry="$(env_get BIVOUAC_DAEMON_IMAGE)"; registry="${registry%/bivouac-daemon:*}"
@@ -278,19 +282,16 @@ deploy() {
   write_status running pull
   pull_images || { [ "$previous" = 1 ] && { restore "$bdir"; wait_healthy "$FROM_VERSION" || true; write_status rolled_back pull "Could not download the new images. The previous version is running again."; exit 1; }; write_status failed pull "Could not download the images."; exit 1; }
   write_status running configure
-  render
-  render_extra
-  write_status running restart
-  log "Starting version $target"
-  systemctl enable bivouac.service >/dev/null 2>&1 || true
-  ( cd "$OPT" && docker compose up -d --remove-orphans >/dev/null )
+  local started=1
+  { render && render_extra && write_status running restart && log "Starting version $target" && { systemctl enable bivouac.service >/dev/null 2>&1 || true; } && ( cd "$OPT" && docker compose up -d --remove-orphans >/dev/null ); } || started=0
   write_status running health
-  if wait_healthy "$target"; then
+  if [ "$started" = 1 ] && wait_healthy "$target"; then
     write_status done health
     log "bivouac $target is running"
     return 0
   fi
   local why="The new version did not become healthy within ${HEALTH_TIMEOUT}s."
+  [ "$started" = 1 ] || why="The new version could not be started."
   docker logs --tail 20 bivouac-web >&2 2>&1 || true
   if [ "$previous" = 1 ] && [ -n "$bdir" ]; then
     restore "$bdir"
