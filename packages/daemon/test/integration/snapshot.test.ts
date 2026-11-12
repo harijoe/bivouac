@@ -22,6 +22,8 @@ let dir: string, store: Store, mgr: TaskManager, remote: string;
 const cfg = makeCfg({ namePrefix: PFX, taskImage: IMAGE, claudeBin: '/opt/bivouac/fake-claude', traefikContainer: `${PFX}-none` });
 
 beforeAll(() => {
+  // the task image may not exist yet when this file runs alone
+  try { execSync(`docker image inspect ${IMAGE}`, { stdio: 'ignore' }); } catch { execSync(`docker build -q -t ${IMAGE} ${path.join(repoRoot, 'packages/task-image')}`, { stdio: 'ignore', timeout: 600_000 }); }
   dir = cfg.dataDir;
   remote = mkdtempSync(path.join(tmpdir(), 'bv-bench-repo-'));
   cpSync(path.join(repoRoot, 'examples/node-postgres'), remote, { recursive: true });
