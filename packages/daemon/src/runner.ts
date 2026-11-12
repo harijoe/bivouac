@@ -10,6 +10,7 @@ import type { Project } from '@bivouac/shared';
 import { claudeEnv, resolveClaude } from './accounts.js';
 import { ServiceWatch } from './service-watch.js';
 import { Shots } from './shots.js';
+import { fingerprint as envFingerprint, LOCK_FILES, removeArchive, SNAPSHOT_KEEP, SNAPSHOT_MAX_BYTES } from './snapshot.js';
 import { describeRuntime, detectRuntime, miseConfig, RUNTIME_FILES, runtimeKey, type RuntimeSpec } from './runtime.js';
 
 export type SandboxFactory = (task: Task) => Sandbox;
@@ -27,8 +28,11 @@ const addUsage = (a: Usage, b: Usage): Usage => ({
 export class TaskManager {
   private active = new Map<number, Active>();
   readonly shots: Shots;
+  /** Deletes a snapshot archive without a task at hand (a project's rebuild); the web service replaces it with a call to the executor. */
+  removeSnapshotFile: (project: string, fp: string) => Promise<void>;
   constructor(private store: Store, private cfg: DaemonConfig, private makeSandbox: SandboxFactory, private repoToken: RepoTokenProvider = async (p) => store.getProjectToken(p.id), private fetchImpl?: typeof fetch) {
     this.shots = new Shots(store, cfg.dataDir);
+    this.removeSnapshotFile = async (project, fp) => removeArchive(path.join(cfg.dataDir, 'projects', project, 'snapshots'), fp);
     store.previewUrlFor = (project, name, portName) => previewUrl(cfg, project, name, portName);
     store.aliasUrlFor = (alias, portName) => aliasUrl(cfg, alias, portName);
   }
@@ -248,14 +252,8 @@ export class TaskManager {
 
     // 3. setup (once per workspace) and dev server
     if ((await sb.readFile('.bivouac/setup.done')) === null) {
-      if (eff.setup) {
-        this.store.addEvent(id, 'system', { subtype: 'setup', command: eff.setup });
-        const s = this.sink(id, 'setup');
-        const code = await sb.exec(['bash', '-lc', eff.setup], { cwd: path.join(sb.ws, 'repo'), onData: s.push, signal: a.abort.signal });
-        s.end();
-        if (a.stop) return this.finishStopped(id);
-        if (code !== 0) throw new Error(`setup command failed with exit code ${code}`);
-      }
+      if (eff.setup) await this.runSetup(id, a, project, sb, eff, runtime);
+      if (a.stop) return this.finishStopped(id);
       await sb.writeFile('.bivouac/setup.done', new Date().toISOString());
     }
     let devKey = '';
@@ -345,6 +343,75 @@ export class TaskManager {
     }
     } finally {
       if (open !== null) await this.markAttempt(id, sb, open, 'end');
+    }
+  }
+
+  /**
+   * `setup`, started from the environment snapshot of the project when one matches (same lock files, setup command, tool versions
+   * and task image). `setup` always runs, on top of what the snapshot restored: it stays correct when the snapshot is stale, and a
+   * snapshot that makes it fail is thrown away and setup runs again from scratch. A successful setup without a matching snapshot
+   * leaves a new one for the next task. Snapshots never fail a task: any problem with them is reported and ignored.
+   */
+  private async runSetup(id: number, a: Active, project: Project, sb: Sandbox, eff: ProjectConfig, runtime: RuntimeSpec) {
+    const setup = eff.setup!;
+    const runOnce = async () => {
+      this.store.addEvent(id, 'system', { subtype: 'setup', command: setup });
+      const s = this.sink(id, 'setup');
+      const code = await sb.exec(['bash', '-lc', setup], { cwd: path.join(sb.ws, 'repo'), onData: s.push, signal: a.abort.signal });
+      s.end();
+      return code;
+    };
+    let fp: string | null = null, restored = false, snap = null as ReturnType<Store['findSnapshot']>;
+    try {
+      const files: Record<string, string | null> = {};
+      await Promise.all(LOCK_FILES.map(async (f) => { files[f] = await sb.readFile(`repo/${f}`).catch(() => null); }));
+      fp = envFingerprint({ files, setup, runtime: runtimeKey(runtime), image: await sb.imageId() });
+      if (fp) {
+        this.store.setLastFingerprint(project.id, fp);
+        snap = this.store.findSnapshot(project.id, fp);
+        if (snap) {
+          const t0 = Date.now();
+          restored = await sb.snapshotRestore(fp);
+          if (restored) {
+            this.store.touchSnapshot(snap.id);
+            this.store.addEvent(id, 'system', { subtype: 'snapshot_restored', bytes: snap.bytes, ms: Date.now() - t0, message: `Started from the environment snapshot of ${project.name} (${Math.round(snap.bytes / 1024 ** 2)} MB, restored in ${Math.max(1, Math.round((Date.now() - t0) / 1000))} s); setup runs on top of it.` });
+          } else {
+            this.store.deleteSnapshot(snap.id);
+            this.store.addEvent(id, 'system', { subtype: 'snapshot_missing', message: 'The environment snapshot could not be restored (missing or damaged); setup runs from scratch.' });
+          }
+        }
+      }
+    } catch (e: any) {
+      this.store.addEvent(id, 'system', { subtype: 'snapshot_error', message: `Environment snapshot skipped: ${String(e?.message ?? e)}` });
+    }
+    let code = await runOnce();
+    if (a.stop) return;
+    if (code !== 0 && restored && fp) {
+      // the snapshot may be the cause: forget it, clean the ignored files and run setup once more from scratch
+      this.store.addEvent(id, 'system', { subtype: 'snapshot_discarded', message: 'Setup failed on top of the snapshot; the snapshot was discarded and setup runs again from scratch.' });
+      const old = this.store.findSnapshot(project.id, fp);
+      if (old) this.store.deleteSnapshot(old.id);
+      await sb.snapshotDelete(fp).catch(() => {});
+      await sb.cleanIgnored().catch(() => {});
+      restored = false;
+      code = await runOnce();
+      if (a.stop) return;
+    }
+    if (code !== 0) throw new Error(`setup command failed with exit code ${code}`);
+    if (fp && !restored) await this.saveSnapshot(id, project, sb, fp);
+  }
+
+  private async saveSnapshot(id: number, project: Project, sb: Sandbox, fp: string) {
+    try {
+      const t0 = Date.now();
+      const r = await sb.snapshotCreate(fp, SNAPSHOT_MAX_BYTES);
+      if (!r) return;
+      if ('tooLarge' in r) { this.store.addEvent(id, 'system', { subtype: 'snapshot_skipped', message: `The environment is ${Math.round(r.tooLarge / 1024 ** 3 * 10) / 10} GB: too large to keep as a snapshot (limit ${SNAPSHOT_MAX_BYTES / 1024 ** 3} GB).` }); return; }
+      this.store.addSnapshot(project.id, fp, r.bytes);
+      for (const old of this.store.snapshotsOverLimit(project.id, SNAPSHOT_KEEP)) { this.store.deleteSnapshot(old.id); await sb.snapshotDelete(old.fingerprint).catch(() => {}); }
+      this.store.addEvent(id, 'system', { subtype: 'snapshot_created', bytes: r.bytes, ms: Date.now() - t0, message: `Environment snapshot saved for the next tasks of ${project.name} (${Math.round(r.bytes / 1024 ** 2)} MB, ${Math.max(1, Math.round((Date.now() - t0) / 1000))} s).` });
+    } catch (e: any) {
+      this.store.addEvent(id, 'system', { subtype: 'snapshot_error', message: `The environment snapshot could not be saved: ${String(e?.message ?? e)}` });
     }
   }
 

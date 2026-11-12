@@ -5,7 +5,9 @@ import { randomBytes } from 'node:crypto';
 import { parseServices } from '@bivouac/shared';
 import type { DaemonConfig } from './config.js';
 import { safeEqual } from './crypto.js';
+import path from 'node:path';
 import { DockerSandbox, type Sandbox } from './sandbox.js';
+import { removeArchive } from './snapshot.js';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -146,6 +148,17 @@ export function createExecutorApp(cfg: DaemonConfig, docker: Dockerode, login: L
   app.get('/sandboxes/:id/service-logs', wrap(async (c) => c.json({ text: await sb(c).serviceLogs(c.req.query('name') ?? '', Number(c.req.query('tail') ?? 500)) })));
   app.get('/sandboxes/:id/service-states', wrap(async (c) => c.json({ states: await sb(c).serviceStates() })));
   app.post('/sandboxes/:id/service-restart', wrap(async (c) => { await sb(c).restartService(c.req.query('name') ?? ''); return c.json({ ok: true }); }));
+  app.get('/sandboxes/:id/image-id', wrap(async (c) => c.json({ id: await sb(c).imageId() })));
+  app.post('/sandboxes/:id/snapshot-create', wrap(async (c) => { const b = await c.req.json(); return c.json({ result: await sb(c).snapshotCreate(String(b.fp), b.maxBytes ? Number(b.maxBytes) : undefined) }); }));
+  app.post('/sandboxes/:id/snapshot-restore', wrap(async (c) => { const b = await c.req.json(); return c.json({ restored: await sb(c).snapshotRestore(String(b.fp)) }); }));
+  app.post('/sandboxes/:id/snapshot-delete', wrap(async (c) => { const b = await c.req.json(); await sb(c).snapshotDelete(String(b.fp)); return c.json({ ok: true }); }));
+  app.post('/sandboxes/:id/clean-ignored', wrap(async (c) => { await sb(c).cleanIgnored(); return c.json({ ok: true }); }));
+  app.post('/snapshots/remove', wrap(async (c) => {
+    const b = await c.req.json();
+    if (!SLUG.test(String(b.project))) throw new Error('bad project');
+    removeArchive(path.join(cfg.dataDir, 'projects', String(b.project), 'snapshots'), String(b.fp));
+    return c.json({ ok: true });
+  }));
   app.post('/sandboxes/:id/mark', wrap(async (c) => c.json({ mark: await sb(c).mark() })));
   app.post('/sandboxes/:id/diff-summary', wrap(async (c) => {
     const b = await c.req.json();

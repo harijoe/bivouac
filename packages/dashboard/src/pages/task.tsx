@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ExternalLink, GitBranch, GitPullRequest, Info, Send, Square } from 'lucide-react';
+import { ExternalLink, GitBranch, GitPullRequest, Info, Link2, Send, Square } from 'lucide-react';
 import { isTerminal } from '@bivouac/shared';
 import { ago, api, ApiError, duration, fmtTok, fmtUsd, totalTokens, type Share, type TaskEvent, type TaskView } from '@/api';
 import { AsyncButton } from '@/components/app/async-button';
+import { TaskChanges } from '@/components/app/diff-view';
+import { PreviewHealth } from '@/components/app/preview-health';
 import { LogViewer } from '@/components/app/log-viewer';
 import { EmptyState, ErrorNote, Note, PageSkeleton, STATUS, StatusBadge } from '@/components/app/misc';
 import { TaskHistory } from '@/components/app/task-history';
@@ -18,7 +20,7 @@ import { useAsync, useNow, useStream } from '@/lib/hooks';
 import { Link } from '@/lib/router';
 import { isClaudeProblem } from '@/lib/task-items';
 
-const TABS = ['activity', 'logs', 'sharing', 'settings'] as const;
+const TABS = ['activity', 'changes', 'logs', 'sharing', 'settings'] as const;
 type Tab = (typeof TABS)[number];
 // `#attempt-12` is a link to an attempt of the Activity tab
 const tabFromHash = (): Tab => (TABS as readonly string[]).includes(location.hash.slice(1)) ? (location.hash.slice(1) as Tab) : 'activity';
@@ -65,9 +67,9 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
   if (missing) return <EmptyState title="This task does not exist (anymore)" action={<Button asChild><Link to={`/projects/${project}`}>Back to the project</Link></Button>}>It may have been renamed or deleted.</EmptyState>;
   if (!task) return <PageSkeleton rows={3} />;
 
-  const openPreview = (port?: string) => act.run(async () => {
+  const openPreview = (port?: string, alias?: boolean) => act.run(async () => {
     const w = window.open('', '_blank'); // opened now so the browser does not block it after the request
-    try { const r = await api('POST', `/api/tasks/${task.id}/preview-link`, port ? { port } : {}); if (w) w.location.href = r.url; else location.href = r.url; } catch (e) { w?.close(); throw e; }
+    try { const r = await api('POST', `/api/tasks/${task.id}/preview-link`, { ...(port ? { port } : {}), ...(alias ? { alias: true } : {}) }); if (w) w.location.href = r.url; else location.href = r.url; } catch (e) { w?.close(); throw e; }
   });
   const post = (p: string) => act.run(async () => { await api('POST', `/api/tasks/${task.id}/${p}`, {}); await reload(); });
   const waiting = task.status === 'blocked' || task.status === 'stuck';
@@ -110,7 +112,9 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
 
       <div className="flex flex-wrap gap-2">
         {task.devPort && <AsyncButton className="h-11 sm:h-9" busyLabel="Opening…" onClick={() => openPreview()}><ExternalLink />Open preview</AsyncButton>}
+        {task.devPort && task.aliasUrl && <AsyncButton variant="outline" className="h-11 sm:h-9" busyLabel="Opening…" onClick={() => openPreview(undefined, true)}><Link2 />Open alias</AsyncButton>}
         {task.ports.filter((p) => !p.primary).map((p) => <AsyncButton key={p.name} variant="outline" className="h-11 sm:h-9" busyLabel="Opening…" onClick={() => openPreview(p.name)}><ExternalLink />Open {p.name}</AsyncButton>)}
+        {task.ports.filter((p) => !p.primary && p.aliasUrl).map((p) => <AsyncButton key={`${p.name}-alias`} variant="outline" className="h-11 sm:h-9" busyLabel="Opening…" onClick={() => openPreview(p.name, true)}><Link2 />Open {p.name} alias</AsyncButton>)}
         {active
           ? <AsyncButton variant="outline" className="h-11 sm:h-9" busyLabel="Stopping…" onClick={() => post('stop')}><Square />Stop</AsyncButton>
           : canResume && <ResumeButton task={task} variant={waiting ? 'default' : 'outline'} onDone={afterResume} />}
@@ -120,6 +124,8 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
           : <AsyncButton variant="outline" className="h-11 sm:h-9" busyLabel="Opening the pull request…" onClick={() => post('pr')}><GitPullRequest />Open pull request</AsyncButton>}
       </div>
       <ErrorNote>{act.error}</ErrorNote>
+      {task.aliasUrl && <p className="break-all text-sm text-muted-foreground">Stable address: <a href={task.aliasUrl} target="_blank" rel="noreferrer" className="font-mono text-xs underline underline-offset-4">{task.aliasUrl}</a></p>}
+      <PreviewHealth task={task} onShowLogs={() => setTab('logs')} onChanged={reload} />
 
       {waiting && task.error ? (
         <Note tone="warn" title={task.status === 'blocked' ? 'The agent is waiting for you' : 'The agent was stopped because it was stuck'}>
@@ -154,11 +160,13 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="h-auto w-full justify-start overflow-x-auto sm:w-fit">
           <TabsTrigger value="activity" className="h-10 sm:h-8">Activity</TabsTrigger>
+          <TabsTrigger value="changes" className="h-10 sm:h-8">Changes</TabsTrigger>
           <TabsTrigger value="logs" className="h-10 sm:h-8">Logs</TabsTrigger>
           <TabsTrigger value="sharing" className="h-10 sm:h-8">Preview &amp; sharing{shares.some((s) => s.active) && ` (${shares.filter((s) => s.active).length})`}</TabsTrigger>
           <TabsTrigger value="settings" className="h-10 sm:h-8">Settings</TabsTrigger>
         </TabsList>
         <TabsContent value="activity" className="pt-3"><TaskHistory task={task} subscribe={subscribe} reconnects={reconnects} /></TabsContent>
+        <TabsContent value="changes" className="pt-3"><TaskChanges taskId={task.id} /></TabsContent>
         <TabsContent value="logs" className="pt-3"><LogViewer taskId={task.id} live={active} status={task.status} /></TabsContent>
         <TabsContent value="sharing" className="space-y-4 pt-3"><TaskShares task={task} shares={shares} reload={reload} /></TabsContent>
         <TabsContent value="settings" className="space-y-8 pt-3">

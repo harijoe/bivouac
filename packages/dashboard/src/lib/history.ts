@@ -24,6 +24,9 @@ export function markerOf(e: TaskEvent): HistoryMarker | null {
 /** Events the feed shows (the others only move the header). */
 export const isFeedEvent = (e: TaskEvent) => e.kind !== 'status' && e.kind !== 'rate_limit' && !(e.kind === 'system' && (e.data?.subtype === 'output' || e.data?.subtype === 'limits_changed'));
 
+/** A new set of screenshots was taken: the gallery must be fetched again. */
+export const isScreenshotsEvent = (e: TaskEvent) => e.kind === 'system' && e.data?.subtype === 'screenshots';
+
 /** Folds one live event into the history. Pure; events already seen (same id) change nothing. */
 export function applyEvent(h: HistoryState, e: TaskEvent): HistoryState {
   const m = markerOf(e);

@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import { DEFAULT_SERVICE_CPUS, DEFAULT_SERVICE_MEMORY, type DiffPatch, type DiffSummary, type GitMark, type ServiceConfig } from '@bivouac/shared';
 import { chownTree, git, gitOk } from './git.js';
 import { diffPatch, diffSummary, markState } from './gitdiff.js';
+import { createArchive, extractArchive, removeArchive, snapshotPaths } from './snapshot.js';
 
 export interface SandboxSpec {
   taskId: number;
@@ -63,6 +64,15 @@ export interface Sandbox {
   serviceStates(): Promise<ServiceState[]>;
   /** Starts a stopped sidecar again (its data volume is kept). */
   restartService(name: string): Promise<void>;
+  /** Identity of the image the task container runs from (part of the environment fingerprint). */
+  imageId(): Promise<string>;
+  /** Archives the git-ignored files of the repository (what `setup` installed) under `fp`. Null when there is nothing to keep. */
+  snapshotCreate(fp: string, maxBytes?: number): Promise<{ bytes: number } | { tooLarge: number } | null>;
+  /** Unpacks the snapshot `fp` into the repository. False when it is missing or damaged (nothing is left half-restored). */
+  snapshotRestore(fp: string): Promise<boolean>;
+  snapshotDelete(fp: string): Promise<void>;
+  /** Removes every git-ignored file of the repository (used to start over when a restored snapshot turned out to be bad). */
+  cleanIgnored(): Promise<void>;
   /** The HEAD and a snapshot commit of the working tree right now (see gitdiff.ts); null when there is no repository yet. */
   mark(): Promise<GitMark | null>;
   /** Files that differ between two marks (or `origin/<branch>`), with line counts. `heads` adds the commits between them. */
@@ -87,6 +97,26 @@ export interface Sandbox {
 abstract class HostWorkspace {
   protected abstract hostWs: string;
   protected abstract uid: number;
+  /** Where this project's snapshot archives live (shared by all its tasks). */
+  protected abstract snapDir: string;
+  async snapshotCreate(fp: string, maxBytes?: number) {
+    const repo = this.safe('repo');
+    const ls = await git(['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], { cwd: repo, uid: this.uid });
+    if (ls.code !== 0) throw new Error(`git ls-files failed: ${ls.stderr.trim()}`);
+    return createArchive(this.snapDir, fp, repo, snapshotPaths(ls.stdout.split('\0')), maxBytes);
+  }
+  async snapshotRestore(fp: string) {
+    const repo = this.safe('repo');
+    if (!existsSync(path.join(repo, '.git'))) return false;
+    if (await extractArchive(this.snapDir, fp, repo)) return true;
+    await this.cleanIgnored();
+    return false;
+  }
+  async snapshotDelete(fp: string) { removeArchive(this.snapDir, fp); }
+  async cleanIgnored() {
+    const repo = this.safe('repo');
+    if (existsSync(path.join(repo, '.git'))) await git(['clean', '-fdXq'], { cwd: repo, uid: this.uid });
+  }
   private safe(rel: string) {
     const p = path.resolve(this.hostWs, rel);
     if (p !== this.hostWs && !p.startsWith(this.hostWs + path.sep)) throw new Error('path escapes the workspace');
@@ -214,6 +244,7 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
   readonly ws = '/workspace';
   protected hostWs: string;
   protected uid: number;
+  protected snapDir: string;
   private taskDir: string;
   private container: Dockerode.Container | null = null;
   private name = '';
@@ -223,9 +254,11 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
     this.container = docker.getContainer(this.name);
     this.taskDir = path.join(opts.dataDir, 'projects', opts.project, 'tasks', `t-${opts.taskId}`);
     this.hostWs = path.join(this.taskDir, 'workspace');
+    this.snapDir = path.join(opts.dataDir, 'projects', opts.project, 'snapshots');
     this.uid = opts.uid;
   }
   get networkName() { return this.name; }
+  async imageId() { return (await this.docker.getImage(this.opts.image).inspect().catch(() => null))?.Id ?? this.opts.image; }
 
   async start(spec: SandboxSpec) {
     mkdirSync(this.hostWs, { recursive: true });
@@ -424,8 +457,14 @@ export class LocalSandbox extends HostWorkspace implements Sandbox {
   ws: string;
   protected hostWs: string;
   protected uid = 1000;
+  protected snapDir: string;
   private sup: ChildProcess | null = null;
-  constructor(dir: string, private supervisorPath?: string) { super(); this.ws = dir; this.hostWs = dir; mkdirSync(dir, { recursive: true }); }
+  constructor(dir: string, private supervisorPath?: string, snapDir?: string) {
+    super(); this.ws = dir; this.hostWs = dir; mkdirSync(dir, { recursive: true });
+    // <data>/projects/<project>/tasks/t-N/workspace -> <data>/projects/<project>/snapshots
+    this.snapDir = snapDir ?? path.resolve(dir, '..', '..', '..', 'snapshots');
+  }
+  async imageId() { return 'local'; }
   async start() {
     if (this.supervisorPath && !this.sup) {
       this.sup = spawn('node', [this.supervisorPath], { env: { ...process.env, BIVOUAC_STATE_DIR: `${this.ws}/.bivouac` }, stdio: 'ignore' });

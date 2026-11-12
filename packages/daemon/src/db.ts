@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { EventEmitter } from 'node:events';
-import { emptyUsage, TERMINAL_STATUSES, type PortDef, type ServiceConfig, type EventKind, type ClaudeAccount, type PreviewHealth, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Usage } from '@bivouac/shared';
+import { emptyUsage, TERMINAL_STATUSES, type PortDef, type ServiceConfig, type EventKind, type ClaudeAccount, type EnvSnapshot, type PreviewHealth, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Usage } from '@bivouac/shared';
 import { decrypt, encrypt } from './crypto.js';
 import type { RouteTask } from './routes.js';
 
@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS idempotency (
 CREATE TABLE IF NOT EXISTS claude_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE, kind TEXT NOT NULL, secret_enc TEXT NOT NULL,
   connected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), is_default INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS env_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, fingerprint TEXT NOT NULL,
+  bytes INTEGER NOT NULL, uses INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), last_used_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  UNIQUE (project_id, fingerprint));
 CREATE TABLE IF NOT EXISTS shots (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, attempt INTEGER NOT NULL,
   page TEXT NOT NULL, width INTEGER NOT NULL, http_status INTEGER, title TEXT, ok INTEGER NOT NULL, blank INTEGER NOT NULL DEFAULT 0,
@@ -392,6 +397,33 @@ export class Store {
   pendingInstructionCount(taskId: number): number {
     return (this.db.prepare('SELECT COUNT(*) n FROM instructions WHERE task_id=? AND consumed=0').get(taskId) as any).n;
   }
+  // ---- environment snapshots (the archives live next to the task workspaces, see snapshot.ts)
+  private snapFromRow(r: any, current: string | null): EnvSnapshot {
+    return { id: r.id, projectId: r.project_id, fingerprint: r.fingerprint, bytes: r.bytes, createdAt: r.created_at, lastUsedAt: r.last_used_at, uses: r.uses, current: r.fingerprint === current };
+  }
+  /** The fingerprint the latest task of the project asked for. */
+  lastFingerprint(projectId: number): string | null { return this.getSetting(`snapshot_fp_${projectId}`); }
+  setLastFingerprint(projectId: number, fp: string) { this.setSetting(`snapshot_fp_${projectId}`, fp); }
+  listSnapshots(projectId: number): EnvSnapshot[] {
+    const cur = this.lastFingerprint(projectId);
+    return (this.db.prepare('SELECT * FROM env_snapshots WHERE project_id=? ORDER BY last_used_at DESC, id DESC').all(projectId) as any[]).map((r) => this.snapFromRow(r, cur));
+  }
+  findSnapshot(projectId: number, fp: string): EnvSnapshot | null {
+    const r = this.db.prepare('SELECT * FROM env_snapshots WHERE project_id=? AND fingerprint=?').get(projectId, fp);
+    return r ? this.snapFromRow(r, this.lastFingerprint(projectId)) : null;
+  }
+  getSnapshot(id: number): EnvSnapshot | null {
+    const r = this.db.prepare('SELECT * FROM env_snapshots WHERE id=?').get(id) as any;
+    return r ? this.snapFromRow(r, this.lastFingerprint(r.project_id)) : null;
+  }
+  addSnapshot(projectId: number, fp: string, bytes: number) {
+    this.db.prepare(`INSERT INTO env_snapshots(project_id,fingerprint,bytes) VALUES(?,?,?) ON CONFLICT(project_id,fingerprint) DO UPDATE SET bytes=excluded.bytes, last_used_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')`).run(projectId, fp, bytes);
+  }
+  touchSnapshot(id: number) { this.db.prepare(`UPDATE env_snapshots SET uses=uses+1, last_used_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`).run(id); }
+  deleteSnapshot(id: number) { this.db.prepare('DELETE FROM env_snapshots WHERE id=?').run(id); }
+  /** Snapshots beyond the `keep` most recently used of a project; the caller removes their archives. */
+  snapshotsOverLimit(projectId: number, keep: number): EnvSnapshot[] { return this.listSnapshots(projectId).slice(keep); }
+
   // ---- git marks of each attempt (see gitdiff.ts)
   beginAttemptGit(taskId: number, attempt: number, m: { head: string | null; snap: string } | null) {
     this.db.prepare('INSERT OR REPLACE INTO attempt_git(task_id,attempt,start_head,start_snap) VALUES(?,?,?,?)').run(taskId, attempt, m?.head ?? null, m?.snap ?? null);

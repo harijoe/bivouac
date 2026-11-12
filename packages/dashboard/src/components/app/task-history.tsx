@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, CircleCheck, CircleX, Link2, Loader2, Search, X } from 'lucide-react';
+import { Camera, ChevronRight, CircleCheck, CircleX, FileDiff, Link2, Loader2, Search, X } from 'lucide-react';
 import { toast } from 'sonner';
-import type { AttemptSummary, AttemptsPage, HistoryMarker, TaskEvent } from '@bivouac/shared';
+import type { AttemptShots, AttemptSummary, AttemptsPage, HistoryMarker, TaskEvent } from '@bivouac/shared';
 import { ago, api, fmtUsd, type TaskView } from '@/api';
 import { AsyncButton } from './async-button';
+import { AttemptShotsSection, type ShotsState } from './attempt-shots';
+import { DiffPanel, useDiffs, type DiffState, type Which } from './diff-view';
 import { FeedList } from './task-feed';
 import { Hl, HighlightContext } from './highlight';
 import { EmptyState, ErrorNote } from './misc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { applyEvent, attemptFromHash, emptyHistory, fmtDuration, mergeAttempts, mergeEvents, STATE_LABEL, type HistoryState } from '@/lib/history';
+import { applyEvent, attemptFromHash, emptyHistory, fmtDuration, isScreenshotsEvent, mergeAttempts, mergeEvents, STATE_LABEL, type HistoryState } from '@/lib/history';
 import { useDebounced, useNow } from '@/lib/hooks';
 import { allFilters, filterItems, toItems, type Filters } from '@/lib/task-items';
 import { cn } from '@/lib/utils';
@@ -62,9 +64,23 @@ function CheckBadge({ a, running }: { a: AttemptSummary; running: boolean }) {
     : <span className="inline-flex items-center gap-1 text-red-700 dark:text-red-300"><CircleX className="size-3.5" aria-hidden="true" />Check failed ({a.check.exitCode})</span>;
 }
 
-function AttemptSection({ a, task, now, open, onToggle, loaded, loading, error, retry, live, filters, highlighted }: {
+/** A titled part of an attempt that loads its content only once expanded. */
+function Extra({ id, icon: Icon, title, defaultOpen, children }: { id: string; icon: typeof Camera; title: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div className="border-t pt-2">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls={id} className="flex min-h-11 w-full items-center gap-2 rounded-md px-1 text-left text-sm font-medium hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-h-9">
+        <ChevronRight className={cn('size-4 shrink-0 transition-transform', open && 'rotate-90')} aria-hidden="true" /><Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />{title}
+      </button>
+      {open && <div id={id} className="pt-2">{children}</div>}
+    </div>
+  );
+}
+interface Extras { shots: ShotsState; ensureShots: () => void; reloadShots: () => Promise<void>; diffs: Record<string, DiffState>; loadDiff: (w: Which) => Promise<void> }
+
+function AttemptSection({ a, task, now, open, onToggle, loaded, loading, error, retry, live, filters, highlighted, extras }: {
   a: AttemptSummary; task: TaskView; now: number; open: boolean; onToggle: () => void; loaded: Loaded | undefined; loading: boolean; error: string; retry: () => void;
-  live: TaskEvent[] | undefined; filters: Filters; highlighted: boolean;
+  live: TaskEvent[] | undefined; filters: Filters; highlighted: boolean; extras: Extras;
 }) {
   const running = (task.status === 'running' || task.status === 'checking') && task.iteration === a.attempt;
   const isCost = task.costKind === 'cost';
@@ -101,6 +117,12 @@ function AttemptSection({ a, task, now, open, onToggle, loaded, loading, error, 
             : items.length ? <FeedList items={items} />
             : <p className="text-sm text-muted-foreground">{loaded?.events.length || live?.length ? 'Nothing to show with the current filters.' : running ? 'The agent is starting…' : 'No messages in this attempt.'}</p>}
           {loaded?.truncated && <p className="text-xs text-muted-foreground">This attempt is very long: only its first events are shown here.</p>}
+          <Extra id={`attempt-${a.attempt}-shots`} icon={Camera} title="Screenshots" defaultOpen>
+            <AttemptShotsSection taskId={task.id} attempt={a.attempt} state={extras.shots} ensure={extras.ensureShots} reload={extras.reloadShots} />
+          </Extra>
+          <Extra id={`attempt-${a.attempt}-changes`} icon={FileDiff} title="Changes">
+            <DiffPanel taskId={task.id} which={a.attempt} state={extras.diffs[String(a.attempt)]} load={extras.loadDiff} />
+          </Extra>
         </div>
       )}
     </section>
@@ -133,6 +155,19 @@ export function TaskHistory({ task, subscribe, reconnects }: { task: TaskView; s
   const scrolled = useRef(false);
   const list = useRef<HTMLDivElement>(null);
   const id = task.id;
+  const [shots, setShots] = useState<ShotsState>({ data: null, loading: false, error: '' });
+  const shotsWanted = useRef(false);
+  const { diffs, load: loadDiff } = useDiffs(id);
+
+  // ----- screenshots: one fetch for the whole task, made when the first gallery is shown and again when new shots are announced
+  const loadShots = useCallback(async () => {
+    shotsWanted.current = true;
+    setShots((o) => ({ ...o, loading: true, error: '' }));
+    try { const data = await api<AttemptShots[]>('GET', `/api/tasks/${id}/shots?limit=12`); setShots({ data, loading: false, error: '' }); }
+    catch (e) { setShots((o) => ({ ...o, loading: false, error: (e as Error).message })); }
+  }, [id]);
+  const ensureShots = useCallback(() => { if (!shotsWanted.current) void loadShots(); }, [loadShots]);
+  useEffect(() => { shotsWanted.current = false; setShots({ data: null, loading: false, error: '' }); }, [id]);
 
   // ----- first page (or the page that contains the attempt a link points to), then live events
   const loadFirst = useCallback(async (limit: number) => {
@@ -156,15 +191,17 @@ export function TaskHistory({ task, subscribe, reconnects }: { task: TaskView; s
     // only on another task
   }, [id]);
   useEffect(() => subscribe((e) => {
+    if (isScreenshotsEvent(e) && shotsWanted.current) void loadShots();
     if (!live.current) { buffer.current.push(e); return; }
     setH((old) => applyEvent(old, e));
-  }), [subscribe]);
+  }), [subscribe, loadShots]);
   // the stream dropped and came back: events may have been missed
   const first = useRef(true);
   useEffect(() => {
     if (first.current) { first.current = false; return; }
     if (!live.current) return;
     setLoaded({});
+    if (shotsWanted.current) void loadShots();
     loadFirst(Math.max(PAGE, Math.min(h.attempts.length, 100))).catch(() => {});
   }, [reconnects]);
 
@@ -265,7 +302,8 @@ export function TaskHistory({ task, subscribe, reconnects }: { task: TaskView; s
           {shown.map((a) => (
             <div key={a.attempt} className="space-y-3">
               <AttemptSection a={a} task={task} now={now} open={isOpen(a.attempt)} onToggle={() => setOpenA((o) => ({ ...o, [a.attempt]: !isOpen(a.attempt) }))}
-                loaded={loaded[a.attempt]} loading={!!loadingA[a.attempt]} error={errA[a.attempt] ?? ''} retry={() => loadAttempt(a.attempt)} live={h.live[a.attempt]} filters={filters} highlighted={target === a.attempt} />
+                loaded={loaded[a.attempt]} loading={!!loadingA[a.attempt]} error={errA[a.attempt] ?? ''} retry={() => loadAttempt(a.attempt)} live={h.live[a.attempt]} filters={filters} highlighted={target === a.attempt}
+                extras={{ shots, ensureShots, reloadShots: loadShots, diffs, loadDiff }} />
               <Markers markers={a.markers} filters={filters} />
             </div>
           ))}

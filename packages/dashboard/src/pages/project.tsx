@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ExternalLink, FolderGit2, ListTodo, Plus } from 'lucide-react';
 import { api, type ProjectWithTotals, type Session, type TaskView } from '@/api';
+import { AliasSummary } from '@/components/app/project-alias';
 import { EmptyState, Note, PageHeader } from '@/components/app/misc';
 import { FILTERS, countByFilter, matchesFilter, repoLabel, repoWebUrl, type TaskFilter } from '@/components/app/project-filters';
 import { PullList, usePulls } from '@/components/app/project-pulls';
@@ -15,7 +16,7 @@ function Stat({ label, children }: { label: string; children: React.ReactNode })
   return <div className="rounded-lg border p-3"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-lg font-semibold">{children}</dd></div>;
 }
 
-export function ProjectPage({ project }: { project: string; session: Session }) {
+export function ProjectPage({ project, session }: { project: string; session: Session }) {
   const projects = useLoad(() => api<ProjectWithTotals[]>('GET', '/api/projects'));
   const p = projects.data?.find((x) => x.name === project) ?? null;
   const tasks = useLoad(() => (p ? api<TaskView[]>('GET', `/api/tasks?project=${p.id}`) : Promise.resolve(null)), [p?.id]);
@@ -56,6 +57,7 @@ export function ProjectPage({ project }: { project: string; session: Session }) 
         <Stat label="Open pull requests">{prsLoading ? <Skeleton className="h-6 w-8" /> : prs ? prs.length : '—'}</Stat>
         <Stat label="Tasks">{p.totals.tasks}</Stat>
       </dl>
+      <AliasSummary p={p} session={session} taskName={all?.find((t) => t.id === p.aliasTaskId)?.name ?? null} />
       <section className="space-y-2">
         <h2 className="text-sm font-medium">Open pull requests</h2>
         <PullList prs={prs} loading={prsLoading} />

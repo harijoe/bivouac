@@ -68,6 +68,9 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     if (!p) throw new UserError('This project does not exist.', 'unknown_project', 404);
     return c.json({ prs: await svc.openPullRequests(p) });
   }));
+  app.get('/api/projects/:id/snapshots', run((c) => c.json(svc.listSnapshots(Number(param(c, 'id'))))));
+  app.post('/api/projects/:id/snapshots/rebuild', run(async (c) => { admin(c); return c.json(await svc.rebuildSnapshots(Number(param(c, 'id')), actorOf(c))); }));
+  app.delete('/api/projects/:id/snapshots/:sid', run(async (c) => { admin(c); await svc.deleteSnapshot(Number(param(c, 'id')), Number(param(c, 'sid')), actorOf(c)); return c.json({ ok: true }); }));
   app.post('/api/projects', run(async (c) => {
     admin(c);
     const b = await c.req.json().catch(() => ({}));
@@ -89,10 +92,12 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     store.updateProject(p.id, { config, githubToken: b.githubToken, defaultBranch: b.defaultBranch, claudeAccountId });
     return c.json(store.getProject(p.id));
   }));
-  app.delete('/api/projects/:id', run((c) => {
+  app.delete('/api/projects/:id', run(async (c) => {
     admin(c);
     const id = Number(param(c, 'id'));
     if (store.listTasks(id).length) throw new UserError('Delete or archive the tasks of this project first.', 'has_tasks', 409);
+    const doomed = store.getProject(id);
+    for (const s of doomed ? store.listSnapshots(id) : []) await ctx.mgr.removeSnapshotFile(doomed!.name, s.fingerprint).catch(() => {});
     store.deleteProject(id);
     auth.audit(actorOf(c).label, 'project_deleted', { id });
     return c.json({ ok: true });

@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { Link2 } from 'lucide-react';
+import { ChevronRight, Link2 } from 'lucide-react';
 import { api, type Share, type TaskView } from '@/api';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { AsyncButton } from './async-button';
 import { CopyField, EmptyState, ErrorNote } from './misc';
 import { useAsync } from '@/lib/hooks';
+import { shareEnd } from '@/lib/preview';
 
 const DURATIONS = [['1h', '1 hour'], ['24h', '24 hours'], ['7d', '7 days'], ['never', 'No expiry']] as const;
 const expiry = (s: Share) => (s.expiresAt ? `expires ${new Date(s.expiresAt * 1000).toLocaleString()}` : 'no expiry');
@@ -15,6 +17,7 @@ export function TaskShares({ task, shares, reload }: { task: TaskView; shares: S
   const [dur, setDur] = useState<string>('24h');
   const a = useAsync();
   const active = shares.filter((s) => s.active);
+  const ended = shares.filter((s) => !s.active);
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">Anyone with a link can view this preview, and only this preview, until it expires or you revoke it.</p>
@@ -38,6 +41,18 @@ export function TaskShares({ task, shares, reload }: { task: TaskView; shares: S
           <AsyncButton variant="outline" className="h-11 sm:h-9" busyLabel="Revoking…" onClick={() => a.run(async () => { await api('DELETE', `/api/tasks/${task.id}/shares/${s.id}`); await reload(); })}>Revoke this link</AsyncButton>
         </div>
       ))}
+      {ended.length > 0 && (
+        <Collapsible>
+          <CollapsibleTrigger className="group flex min-h-11 items-center gap-1.5 rounded-md text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-h-9">
+            <ChevronRight className="size-4 transition-transform group-data-[state=open]:rotate-90" aria-hidden="true" />Expired and revoked ({ended.length})
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <ul className="space-y-1.5 pt-1 text-sm">
+              {ended.map((s) => <li key={s.id} className="flex flex-wrap justify-between gap-x-3 rounded-md border px-3 py-2 text-muted-foreground"><span>Created {new Date(s.createdAt * 1000).toLocaleString()}</span><span>{shareEnd(s)}</span></li>)}
+            </ul>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
     </div>
   );
 }

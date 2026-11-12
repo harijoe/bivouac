@@ -13,6 +13,7 @@ import { resolveClaude } from './accounts.js';
 import type { Updates } from './updates.js';
 import type { PreviewWatch } from './preview-watch.js';
 import type { ProjectContext } from './projectcontext.js';
+import { SNAPSHOT_KEEP } from './snapshot.js';
 import { attemptEvents, listAttempts, searchAttempts } from './attempts.js';
 
 /** An error whose message is safe and useful to show to a person or to a model (it says what to do next). */
@@ -476,6 +477,30 @@ export class Service {
     await this.pwatch.restart(t);
     this.auth.audit(actor.label, 'preview_restarted', { task: t.name, project: t.projectName });
     return this.store.getTask(t.id)!;
+  }
+
+  // ---- environment snapshots
+  listSnapshots(projectRef: string | number) {
+    const p = this.resolveProject(projectRef);
+    const snapshots = this.store.listSnapshots(p.id);
+    return { keep: SNAPSHOT_KEEP, current: this.store.lastFingerprint(p.id), snapshots, bytes: snapshots.reduce((n, s) => n + s.bytes, 0) };
+  }
+  /** Discards every snapshot of the project: the next task runs setup from scratch and leaves a fresh one. */
+  async rebuildSnapshots(projectRef: string | number, actor: Actor) {
+    const p = this.resolveProject(projectRef);
+    const all = this.store.listSnapshots(p.id);
+    for (const s of all) { await this.mgr.removeSnapshotFile(p.name, s.fingerprint).catch(() => {}); this.store.deleteSnapshot(s.id); }
+    this.store.setSetting(`snapshot_fp_${p.id}`, null);
+    this.auth.audit(actor.label, 'snapshots_discarded', { project: p.name, removed: all.length });
+    return { removed: all.length };
+  }
+  async deleteSnapshot(projectRef: string | number, id: number, actor: Actor) {
+    const p = this.resolveProject(projectRef);
+    const s = this.store.getSnapshot(id);
+    if (!s || s.projectId !== p.id) throw new UserError('This snapshot does not exist (anymore).', 'unknown_snapshot', 404);
+    await this.mgr.removeSnapshotFile(p.name, s.fingerprint).catch(() => {});
+    this.store.deleteSnapshot(id);
+    this.auth.audit(actor.label, 'snapshot_deleted', { project: p.name, fingerprint: s.fingerprint.slice(0, 12) });
   }
 
   // ---- screenshots

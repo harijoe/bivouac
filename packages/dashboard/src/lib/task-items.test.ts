@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allFilters, filterItems, isClaudeProblem, summarize, toItems } from './task-items';
+import { allFilters, filterItems, isClaudeProblem, summarize, systemNote, toItems } from './task-items';
 
 const ev = (id: number, kind: string, data: any) => ({ id, taskId: 1, kind, data, createdAt: '' }) as any;
 describe('toItems', () => {
@@ -40,5 +40,24 @@ describe('helpers', () => {
     expect(isClaudeProblem('Usage limit reached for the account')).toBe(true);
     expect(isClaudeProblem('Tests failed')).toBe(false);
     expect(isClaudeProblem(null)).toBe(false);
+  });
+});
+
+describe('systemNote', () => {
+  it('maps the new system events to a sentence, a tone and an icon', () => {
+    expect(systemNote({ subtype: 'preview_gave_up', message: 'Gave up after 8 restarts.' })).toEqual({ text: 'Gave up after 8 restarts.', tone: 'warn', icon: 'down' });
+    expect(systemNote({ subtype: 'preview_recovered' })).toMatchObject({ tone: 'ok', icon: 'recovered' });
+    expect(systemNote({ subtype: 'alias_assigned', message: 'x' })).toMatchObject({ icon: 'link', tone: 'info' });
+    expect(systemNote({ subtype: 'mark_failed' })?.tone).toBe('warn');
+    expect(systemNote({ subtype: 'service_incident' })).toBeNull();
+  });
+  it('screenshots are a warning only when something is wrong', () => {
+    expect(systemNote({ subtype: 'screenshots', ok: true, count: 4, problems: 0 })?.tone).toBe('info');
+    expect(systemNote({ subtype: 'screenshots', ok: true, count: 4, problems: 2 })?.tone).toBe('warn');
+    expect(systemNote({ subtype: 'screenshots', ok: false, message: 'Could not reach the dev server' })).toMatchObject({ tone: 'warn', text: 'Could not reach the dev server' });
+  });
+  it('shows up in the feed', () => {
+    const items = toItems([{ id: 1, taskId: 1, kind: 'system', data: { subtype: 'preview_down', message: 'down' }, createdAt: '' } as any]);
+    expect(items).toEqual([{ kind: 'note', id: 1, text: 'down', tone: 'warn', icon: 'down' }]);
   });
 });

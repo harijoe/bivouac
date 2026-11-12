@@ -16,6 +16,7 @@ const executor = new ExecutorClient(cfg.executorUrl, cfg.executorToken);
 const ctx = buildContext({ cfg, store, makeSandbox: (t) => executor.sandbox(t.id, t.projectName), login: executor, update: executor });
 ctx.updates.recordOutcome();
 ctx.updates.startBackground();
+ctx.mgr.removeSnapshotFile = (project, fp) => executor.snapshotRemove(project, fp);
 ctx.mgr.recover();
 ctx.svc.pwatch.start();
 serve({ fetch: createApp(ctx).fetch, port: cfg.port, hostname: cfg.bind }, (i) => console.log(`bivouac web listening on ${i.address}:${i.port}`));

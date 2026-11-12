@@ -6,7 +6,31 @@ export type Item =
   | { kind: 'you'; id: number; text: string; queued?: boolean }
   | { kind: 'tools'; id: number; calls: ToolCall[] }
   | { kind: 'check'; id: number; ok: boolean; command: string; output: string; exitCode: number }
-  | { kind: 'note'; id: number; text: string; bad?: boolean; href?: string };
+  | { kind: 'note'; id: number; text: string; bad?: boolean; href?: string; tone?: NoteTone; icon?: NoteIcon };
+export type NoteTone = 'warn' | 'ok' | 'info';
+export type NoteIcon = 'down' | 'restart' | 'recovered' | 'camera' | 'link' | 'unlink' | 'mark';
+
+/** One-liners for the system events of the preview, screenshots, alias and git marks: a sentence, an icon and a tone. */
+export function systemNote(d: any): { text: string; tone: NoteTone; icon: NoteIcon } | null {
+  const msg = (fallback: string) => (String(d?.message ?? '').trim() || fallback);
+  switch (d?.subtype) {
+    case 'preview_down': return { text: msg('The preview stopped answering.'), tone: 'warn', icon: 'down' };
+    case 'preview_restarting': return { text: msg('Restarting the preview.'), tone: 'info', icon: 'restart' };
+    case 'preview_gave_up': return { text: msg('bivouac gave up restarting the preview.'), tone: 'warn', icon: 'down' };
+    case 'preview_recovered': return { text: msg('The preview is back.'), tone: 'ok', icon: 'recovered' };
+    case 'preview_restart_requested': return { text: msg('A restart of the preview was requested.'), tone: 'info', icon: 'restart' };
+    case 'screenshots': {
+      const problems = Number(d.problems ?? 0);
+      const bad = d.ok === false || problems > 0;
+      const fallback = d.ok === false ? 'Screenshots could not be taken.' : `${Number(d.count ?? 0)} screenshots taken${problems ? `, ${problems} with problems` : ''}.`;
+      return { text: msg(fallback), tone: bad ? 'warn' : 'info', icon: 'camera' };
+    }
+    case 'alias_assigned': return { text: msg('The stable address now points to this task.'), tone: 'info', icon: 'link' };
+    case 'alias_released': return { text: msg('The stable address no longer points to this task.'), tone: 'info', icon: 'unlink' };
+    case 'mark_failed': return { text: msg('The git mark of this attempt could not be recorded.'), tone: 'warn', icon: 'mark' };
+    default: return null;
+  }
+}
 
 export const summarize = (i: any) => String(i?.command ?? i?.file_path ?? i?.pattern ?? i?.path ?? (i ? JSON.stringify(i) : '')).slice(0, 90);
 
@@ -35,6 +59,7 @@ export function toItems(events: TaskEvent[]): Item[] {
         else if (d.subtype === 'pr') out.push({ kind: 'note', id: e.id, text: 'Pull request opened.', href: d.url });
         else if (d.subtype === 'config_warning') out.push({ kind: 'note', id: e.id, text: d.message, bad: true });
         else if (d.subtype === 'service_incident') out.push({ kind: 'note', id: e.id, text: String(d.message ?? ''), bad: true });
+        else { const n = systemNote(d); if (n) out.push({ kind: 'note', id: e.id, ...n }); }
         break;
       default: break;
     }

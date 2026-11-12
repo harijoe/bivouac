@@ -20,6 +20,8 @@ export class ExecutorClient {
   loginGet(id: string) { return this.call<LoginSession>('GET', `/claude-login/${id}`); }
   loginInput(id: string, text: string) { return this.call('POST', `/claude-login/${id}/input`, { text }); }
   loginCancel(id: string) { return this.call('DELETE', `/claude-login/${id}`); }
+  /** Removes one snapshot archive of a project (the web service cannot reach the files). */
+  async snapshotRemove(project: string, fp: string) { await this.call('POST', '/snapshots/remove', { project, fp }); }
   updateStart(version: string) { return this.call('POST', '/update/start', { version }); }
   async updateRunning() { return (await this.call<{ running: boolean }>('GET', '/update/running')).running; }
   async healthy() { try { return (await fetch(this.baseUrl + '/health')).ok; } catch { return false; } }
@@ -41,6 +43,11 @@ export class RemoteSandbox implements Sandbox {
   async serviceLogs(name: string, tail: number) { return (await this.c.call('GET', this.p('service-logs', `&name=${encodeURIComponent(name)}&tail=${tail}`))).text as string; }
   async serviceStates() { return (await this.c.call('GET', this.p('service-states'))).states as ServiceState[]; }
   async restartService(name: string) { await this.c.call('POST', this.p('service-restart', `&name=${encodeURIComponent(name)}`)); }
+  async imageId() { return (await this.c.call('GET', this.p('image-id'))).id as string; }
+  async snapshotCreate(fp: string, maxBytes?: number) { return (await this.c.call('POST', this.p('snapshot-create'), { fp, maxBytes })).result as { bytes: number } | { tooLarge: number } | null; }
+  async snapshotRestore(fp: string) { return (await this.c.call('POST', this.p('snapshot-restore'), { fp })).restored as boolean; }
+  async snapshotDelete(fp: string) { await this.c.call('POST', this.p('snapshot-delete'), { fp }); }
+  async cleanIgnored() { await this.c.call('POST', this.p('clean-ignored')); }
   async mark() { return (await this.c.call('POST', this.p('mark'))).mark as GitMark | null; }
   async diffSummary(from: string, to: string, heads?: { from: string | null; to: string | null }) { return (await this.c.call('POST', this.p('diff-summary'), { from, to, heads })) as DiffSummary; }
   async diffPatch(from: string, to: string, paths: string[], offset: number, limit: number) { return (await this.c.call('POST', this.p('diff-patch'), { from, to, paths, offset, limit })) as DiffPatch; }

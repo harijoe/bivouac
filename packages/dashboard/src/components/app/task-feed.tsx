@@ -1,11 +1,13 @@
-import { CheckCircle2, ExternalLink, Wrench, XCircle } from 'lucide-react';
+import { Camera, CheckCircle2, ExternalLink, GitCommitHorizontal, Link2, Link2Off, RotateCw, ServerOff, Wrench, XCircle, type LucideIcon } from 'lucide-react';
 import { Hl, useQuery } from './highlight';
-import { summarize, type Item } from '@/lib/task-items';
+import { summarize, type Item, type NoteIcon, type NoteTone } from '@/lib/task-items';
 import { cn } from '@/lib/utils';
 
 const Pre = ({ children, className }: { children: string; className?: string }) => (
   <pre className={cn('max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap break-words', className)}><Hl>{children}</Hl></pre>
 );
+const NOTE_ICON: Record<NoteIcon, LucideIcon> = { down: ServerOff, restart: RotateCw, recovered: CheckCircle2, camera: Camera, link: Link2, unlink: Link2Off, mark: GitCommitHorizontal };
+const NOTE_TONE: Record<NoteTone, string> = { warn: 'text-amber-700 dark:text-amber-300', ok: 'text-emerald-700 dark:text-emerald-300', info: 'text-muted-foreground' };
 const has = (q: string, ...texts: (string | undefined)[]) => q.trim().length >= 2 && texts.some((t) => (t ?? '').toLowerCase().includes(q.trim().toLowerCase()));
 
 /** What the agent said, what was checked and which tools it used, in the order it happened. Tool calls are folded away. */
@@ -52,11 +54,15 @@ export function FeedList({ items }: { items: Item[] }) {
               </details>
             </li>
           );
-          case 'note': return (
-            <li key={it.id} className={cn('text-sm', it.bad ? 'text-red-700 dark:text-red-300' : 'text-muted-foreground')}>
-              <Hl>{it.text}</Hl> {it.href && <a href={it.href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-4">Open<ExternalLink className="size-3" aria-hidden="true" /></a>}
+          case 'note': {
+            const Icon = it.icon ? NOTE_ICON[it.icon] : null;
+            return (
+            <li key={it.id} className={cn('text-sm', it.bad ? 'text-red-700 dark:text-red-300' : NOTE_TONE[it.tone ?? 'info'], Icon && 'flex items-start gap-2')}>
+              {Icon && <Icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />}
+              <span className="min-w-0 break-words"><Hl>{it.text}</Hl> {it.href && <a href={it.href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-4">Open<ExternalLink className="size-3" aria-hidden="true" /></a>}</span>
             </li>
-          );
+            );
+          }
         }
       })}
     </ol>

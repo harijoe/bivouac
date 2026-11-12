@@ -5,6 +5,8 @@ import { api, type ClaudeAccount, type ProjectWithTotals } from '@/api';
 import { AsyncButton } from '@/components/app/async-button';
 import { ConfirmDialog } from '@/components/app/confirm-dialog';
 import { ErrorNote, EmptyState, Note } from '@/components/app/misc';
+import { ProjectAlias } from '@/components/app/project-alias';
+import { EnvSnapshots } from '@/components/app/env-snapshots';
 import { RepoPicker, TokenRepoForm } from '@/components/app/repo-picker';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -35,7 +37,7 @@ function AddRepository({ s, onAdded }: { s: SectionProps['s']; onAdded: () => vo
   );
 }
 
-function ProjectRow({ p, accounts, admin, onChange }: { p: ProjectWithTotals; accounts: ClaudeAccount[]; admin: boolean; onChange: () => void }) {
+function ProjectRow({ p, accounts, admin, session, onChange }: { p: ProjectWithTotals; accounts: ClaudeAccount[]; admin: boolean; session: SectionProps['session']; onChange: () => void }) {
   const a = useAsync();
   const repo = p.githubRepo ?? p.repoUrl;
   const href = p.githubRepo ? `https://github.com/${p.githubRepo}` : p.repoUrl;
@@ -68,6 +70,10 @@ function ProjectRow({ p, accounts, admin, onChange }: { p: ProjectWithTotals; ac
           </Select>
         ) : <p id={`acct-${p.id}`} className="text-sm">{p.claudeAccountName ?? 'Default account'}</p>}
         <ErrorNote>{a.error}</ErrorNote>
+      </div>
+      <div className="-mx-4 divide-y border-t">
+        <ProjectAlias p={p} session={session} admin={admin} onChange={onChange} />
+        <EnvSnapshots p={p} admin={admin} />
       </div>
     </li>
   );
@@ -128,7 +134,7 @@ export function ProjectsSection(props: SectionProps) {
         )}
         {list && list.length > 0 && (
           <ul className="divide-y rounded-lg border">
-            {list.map((p) => <ProjectRow key={p.id} p={p} accounts={accounts.data ?? []} admin={s.admin} onChange={refresh} />)}
+            {list.map((p) => <ProjectRow key={p.id} p={p} accounts={accounts.data ?? []} admin={s.admin} session={props.session} onChange={refresh} />)}
           </ul>
         )}
       </section>
