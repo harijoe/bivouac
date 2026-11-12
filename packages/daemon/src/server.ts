@@ -96,6 +96,7 @@ export function createApp(ctx: Ctx) {
       return c.redirect('/login?error=not_allowed');
     } else {
       auth.upsertUser({ githubId: gu.id, login: gu.login, name: gu.name, avatarUrl: gu.avatarUrl });
+      auth.addAllowed('user', String(gu.id), gu.login);
     }
     setSessionCookie(ctx, c, auth.createSession(gu.id));
     auth.audit(gu.login, 'login', { githubId: gu.id });
