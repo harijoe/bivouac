@@ -163,7 +163,16 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     const t = taskOf(c);
     if (!t.devPort) throw new UserError('This task has no preview yet: it is still starting.', 'no_preview');
     const b = await c.req.json().catch(() => ({}));
-    return c.json({ url: svc.ownerPreviewUrl(t, typeof b.port === 'string' ? b.port : undefined) });
+    return c.json({ url: svc.ownerPreviewUrl(t, typeof b.port === 'string' ? b.port : undefined, b.alias === true) });
+  }));
+  app.post('/api/tasks/:id/preview/restart', run(async (c) => c.json(view(await svc.restartPreview(taskOf(c), actorOf(c))))));
+  // alias of a project: the name and the public paths are administrator settings, the target task can be changed by any signed-in user
+  app.put('/api/projects/:id/alias', run(async (c) => {
+    const p = store.getProject(Number(param(c, 'id')));
+    if (!p) throw new UserError('This project does not exist.', 'unknown_project', 404);
+    const b = await c.req.json().catch(() => ({}));
+    if (b.alias !== undefined || b.publicPaths !== undefined) admin(c);
+    return c.json(svc.setAlias(p.id, { alias: b.alias, task: b.task, publicPaths: b.publicPaths }, actorOf(c)));
   }));
   app.post('/api/tasks/:id/shares', run(async (c) => {
     const b = await c.req.json().catch(() => ({}));

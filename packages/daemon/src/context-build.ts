@@ -6,6 +6,7 @@ import { Store } from './db.js';
 import { GithubApp } from './githubapp.js';
 import { OAuthServer } from './oauth.js';
 import { Previews } from './preview.js';
+import { PreviewWatch } from './preview-watch.js';
 import { TaskManager, type SandboxFactory } from './runner.js';
 import { Service } from './service.js';
 import { ProjectContext } from './projectcontext.js';
@@ -36,6 +37,7 @@ export function buildContext(o: BuildOpts): Ctx {
   ref.svc = svc;
   const updates = new Updates(store, cfg, mgr, auth, o.update ?? null, o.fetchImpl ?? fetch, o.now);
   svc.updates = updates;
+  svc.pwatch = new PreviewWatch(store, (t) => mgr.sandboxFor(t));
   svc.pctx = new ProjectContext(store, cfg, (p) => svc.repoToken(p, 'read'), o.fetchImpl ?? fetch);
   const oauth = new OAuthServer(store, () => cfg.oauthRedirectAllow);
   return {

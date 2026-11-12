@@ -100,7 +100,15 @@ export function buildMcpServer(svc: Service, actor: Actor): McpServer {
     { project: PROJECT, task: TASK, ...LIMIT_PARAMS },
     (a) => svc.summary(svc.updateTaskLimits(svc.resolveTask(a.project, a.task), { maxCostUsd: a.max_cost_usd, maxIterations: a.max_iterations, maxTokens: a.max_tokens, successCommand: a.success_command }, actor)));
 
-  tool('create_share_link', 'Create a preview share link', 'Create a link that lets someone without a bivouac account view the live preview of this task only. Choose how long it stays valid. Anyone with the link can see the preview until it expires or is revoked.', WRITE,
+  tool('restart_preview', 'Restart the dev server of a task', 'Restart the dev server (the preview) of a running task now, for example when get_task shows preview.state "down" or "unhealthy". bivouac already restarts a crashed dev server by itself with a growing delay and gives up after 8 tries; this starts it again from scratch.', WRITE,
+    { project: PROJECT, task: TASK },
+    async (a) => svc.summary(await svc.restartPreview(svc.resolveTask(a.project, a.task), actor)));
+
+  tool('set_project_alias_task', 'Point the project alias at a task', 'Make the stable alias URL of a project (for example https://app.<domain>, defined by the owner in the project settings) open the preview of this task, or pass no task to detach it. Use it for OAuth redirect URIs and webhooks of the app under test: the URL stays the same while the task behind it changes. The previous task loses the alias.', WRITE,
+    { project: PROJECT, task: TASK.optional().describe('Task to point the alias at. Leave out to detach the alias.') },
+    (a) => { const p = svc.setAlias(a.project, { task: a.task ?? null }, actor); const t = p.aliasTaskId ? svc.store.getTask(p.aliasTaskId) : null; return { alias: p.alias, task: t?.name ?? null, url: t?.aliasUrl ?? null }; });
+
+  tool('create_share_link', 'Create a preview share link', 'Create a link that lets someone without a bivouac account view the live preview of this task only. Choose how long it stays valid (1h, 24h, 7d or never). Anyone with the link can see the preview until it expires or is revoked; a visitor with an expired link sees an explanation page.', WRITE,
     { project: PROJECT, task: TASK, duration: z.enum(['1h', '24h', '7d', 'never']).default('24h').describe('How long the link works.') },
     (a) => svc.createShareLink(svc.resolveTask(a.project, a.task), a.duration, actor));
 

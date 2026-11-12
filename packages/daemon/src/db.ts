@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { EventEmitter } from 'node:events';
-import { emptyUsage, TERMINAL_STATUSES, type PortDef, type ServiceConfig, type EventKind, type ClaudeAccount, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Usage } from '@bivouac/shared';
+import { emptyUsage, TERMINAL_STATUSES, type PortDef, type ServiceConfig, type EventKind, type ClaudeAccount, type PreviewHealth, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Usage } from '@bivouac/shared';
 import { decrypt, encrypt } from './crypto.js';
 import type { RouteTask } from './routes.js';
 
@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS idempotency (
 CREATE TABLE IF NOT EXISTS claude_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE, kind TEXT NOT NULL, secret_enc TEXT NOT NULL,
   connected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), is_default INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS notices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, text TEXT NOT NULL,
+  consumed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));
 CREATE TABLE IF NOT EXISTS attempt_git (
   task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, attempt INTEGER NOT NULL,
   start_head TEXT, start_snap TEXT, end_head TEXT, end_snap TEXT,
@@ -74,6 +77,8 @@ export class Store {
   readonly bus = new EventEmitter();
   /** Resolves the preview URL for a task row (injected so the store stays config-free). */
   previewUrlFor: (project: string, taskName: string, portName?: string) => string = () => '';
+  /** URL of a project alias (`<alias>.<domain>`, or `<port>.<alias>.<domain>`). */
+  aliasUrlFor: (alias: string, portName?: string) => string = () => '';
 
   constructor(path: string, private key: Buffer) {
     this.db = new Database(path);
@@ -98,6 +103,11 @@ export class Store {
     if (!pc.includes('installation_id')) this.db.exec('ALTER TABLE projects ADD COLUMN installation_id INTEGER');
     if (!pc.includes('claude_account_id')) this.db.exec('ALTER TABLE projects ADD COLUMN claude_account_id INTEGER');
     if (!cols('tasks').includes('account_name')) this.db.exec('ALTER TABLE tasks ADD COLUMN account_name TEXT');
+    if (!cols('tasks').includes('preview_json')) this.db.exec('ALTER TABLE tasks ADD COLUMN preview_json TEXT');
+    if (!pc.includes('alias')) this.db.exec('ALTER TABLE projects ADD COLUMN alias TEXT');
+    if (!pc.includes('alias_task_id')) this.db.exec('ALTER TABLE projects ADD COLUMN alias_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL');
+    if (!pc.includes('alias_public_paths')) this.db.exec("ALTER TABLE projects ADD COLUMN alias_public_paths TEXT NOT NULL DEFAULT '[]'");
+    this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS projects_alias ON projects(alias) WHERE alias IS NOT NULL');
     this.migrateClaudeAccounts();
   }
 
@@ -180,7 +190,7 @@ export class Store {
 
   // ---- projects
   private projectFromRow(r: any): Project {
-    return { id: r.id, name: r.name, repoUrl: r.repo_url, githubRepo: r.github_repo ?? null, installationId: r.installation_id ?? null, defaultBranch: r.default_branch, hasGithubToken: !!r.github_token_enc, claudeAccountId: r.claude_account_id ?? null, config: JSON.parse(r.config_json), createdAt: r.created_at };
+    return { id: r.id, name: r.name, repoUrl: r.repo_url, githubRepo: r.github_repo ?? null, installationId: r.installation_id ?? null, defaultBranch: r.default_branch, hasGithubToken: !!r.github_token_enc, claudeAccountId: r.claude_account_id ?? null, alias: r.alias ?? null, aliasTaskId: r.alias_task_id ?? null, aliasPublicPaths: JSON.parse(r.alias_public_paths ?? '[]'), config: JSON.parse(r.config_json), createdAt: r.created_at };
   }
   createProject(p: { name: string; repoUrl: string; defaultBranch: string; githubToken?: string | null; config?: ProjectConfig; githubRepo?: string | null; installationId?: number | null }): Project {
     const info = this.db.prepare('INSERT INTO projects(name,repo_url,default_branch,github_token_enc,config_json,github_repo,installation_id) VALUES(?,?,?,?,?,?,?)')
@@ -215,21 +225,38 @@ export class Store {
     this.bus.emit('msg', { type: 'project', projectId: id } satisfies StoreMessage);
   }
 
+  // ---- alias: a stable host (`<alias>.<domain>`) a project points at one of its tasks (OAuth callbacks, webhooks)
+  aliasTaken(alias: string, exceptProjectId?: number): boolean {
+    return !!this.db.prepare('SELECT 1 FROM projects WHERE alias=? AND id<>?').get(alias, exceptProjectId ?? -1);
+  }
+  setProjectAlias(projectId: number, p: { alias?: string | null; taskId?: number | null; publicPaths?: string[] }) {
+    if (p.alias !== undefined) this.db.prepare('UPDATE projects SET alias=?, alias_task_id=CASE WHEN ? IS NULL THEN NULL ELSE alias_task_id END WHERE id=?').run(p.alias, p.alias, projectId);
+    if (p.taskId !== undefined) this.db.prepare('UPDATE projects SET alias_task_id=? WHERE id=?').run(p.taskId, projectId);
+    if (p.publicPaths !== undefined) this.db.prepare('UPDATE projects SET alias_public_paths=? WHERE id=?').run(JSON.stringify(p.publicPaths), projectId);
+    this.bus.emit('msg', { type: 'project', projectId } satisfies StoreMessage);
+    for (const t of this.listTasks(projectId)) this.emitTask(t.id);
+  }
+  getProjectByAlias(alias: string): Project | null {
+    const r = this.db.prepare('SELECT * FROM projects WHERE alias=?').get(alias);
+    return r ? this.projectFromRow(r) : null;
+  }
+
   // ---- tasks
   private taskFromRow(r: any): Task {
     const live: LiveConfig = r.live_config ? JSON.parse(r.live_config) : { ports: [], services: {}, error: null };
     const livePorts: PortDef[] = live.ports.length ? live.ports : r.dev_port ? [{ name: 'web', port: r.dev_port, primary: true }] : [];
-    const ports = livePorts.map((p) => ({ ...p, url: this.previewUrlFor(r.project_name, r.name, p.primary ? undefined : p.name) }));
+    const aliased = r.project_alias && r.project_alias_task === r.id ? (r.project_alias as string) : null;
+    const ports = livePorts.map((p) => ({ ...p, url: this.previewUrlFor(r.project_name, r.name, p.primary ? undefined : p.name), ...(aliased ? { aliasUrl: this.aliasUrlFor(aliased, p.primary ? undefined : p.name) } : {}) }));
     const usage: Usage = { inputTokens: r.in_tok, outputTokens: r.out_tok, cacheReadTokens: r.cache_read, cacheCreationTokens: r.cache_create, costUsd: r.cost_usd };
     return {
       id: r.id, projectId: r.project_id, projectName: r.project_name, name: r.name, title: r.title, prompt: r.prompt, successCommand: r.success_command,
       branch: r.branch, baseBranch: r.base_branch, status: r.status, iteration: r.iteration, maxIterations: r.max_iterations,
       maxCostUsd: r.max_cost_usd, maxTokens: r.max_tokens, sessionId: r.session_id, usage,
-      devPort: r.dev_port ?? null, ports, services: Object.entries(live.services).map(([name, v]) => ({ name, image: v.image })), preview: null, aliasUrl: null, configError: live.error, previewUrl: this.previewUrlFor(r.project_name, r.name), pushed: !!r.pushed, prUrl: r.pr_url, error: r.error, accountName: r.account_name ?? null,
+      devPort: r.dev_port ?? null, ports, services: Object.entries(live.services).map(([name, v]) => ({ name, image: v.image })), preview: r.preview_json ? JSON.parse(r.preview_json) : null, aliasUrl: aliased ? this.aliasUrlFor(aliased) : null, configError: live.error, previewUrl: this.previewUrlFor(r.project_name, r.name), pushed: !!r.pushed, prUrl: r.pr_url, error: r.error, accountName: r.account_name ?? null,
       createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at,
     };
   }
-  private static TASK_SELECT = 'SELECT t.*, p.name AS project_name FROM tasks t JOIN projects p ON p.id=t.project_id';
+  private static TASK_SELECT = 'SELECT t.*, p.name AS project_name, p.alias AS project_alias, p.alias_task_id AS project_alias_task FROM tasks t JOIN projects p ON p.id=t.project_id';
   getLiveConfig(id: number): LiveConfig | null {
     const r = this.db.prepare('SELECT live_config FROM tasks WHERE id=?').get(id) as any;
     return r?.live_config ? JSON.parse(r.live_config) : null;
@@ -291,6 +318,17 @@ export class Store {
     this.db.prepare('UPDATE tasks SET in_tok=?, out_tok=?, cache_read=?, cache_create=?, cost_usd=? WHERE id=?')
       .run(u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheCreationTokens, u.costUsd, id);
     return this.emitTask(id)!;
+  }
+  setPreview(id: number, v: PreviewHealth | null) {
+    this.db.prepare('UPDATE tasks SET preview_json=? WHERE id=?').run(v ? JSON.stringify(v) : null, id);
+    return this.emitTask(id);
+  }
+  /** Notes for the agent (preview restarted…), shown in its next prompt. */
+  addNotice(taskId: number, text: string) { this.db.prepare('INSERT INTO notices(task_id,text) VALUES(?,?)').run(taskId, text); }
+  takeNotices(taskId: number): string[] {
+    const rows = this.db.prepare('SELECT text FROM notices WHERE task_id=? AND consumed=0 ORDER BY id').all(taskId) as any[];
+    if (rows.length) this.db.prepare('UPDATE notices SET consumed=1 WHERE task_id=? AND consumed=0').run(taskId);
+    return rows.map((r) => r.text);
   }
   deleteTask(id: number) {
     this.db.prepare('DELETE FROM tasks WHERE id=?').run(id);
@@ -362,10 +400,10 @@ export class Store {
   }
 
   routeTasks(): RouteTask[] {
-    return (this.db.prepare('SELECT t.id, t.name, t.dev_port, t.live_config, p.name AS project FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.dev_port IS NOT NULL OR t.live_config IS NOT NULL').all() as any[])
+    return (this.db.prepare('SELECT t.id, t.name, t.dev_port, t.live_config, p.name AS project, p.alias AS alias, p.alias_task_id AS alias_task FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.dev_port IS NOT NULL OR t.live_config IS NOT NULL').all() as any[])
       .map((r) => {
         const live: LiveConfig | null = r.live_config ? JSON.parse(r.live_config) : null;
-        return { id: r.id, name: r.name, project: r.project, ports: live?.ports.length ? live.ports : r.dev_port ? [{ name: 'web', port: r.dev_port, primary: true }] : [] };
+        return { id: r.id, name: r.name, project: r.project, alias: r.alias && r.alias_task === r.id ? (r.alias as string) : undefined, ports: live?.ports.length ? live.ports : r.dev_port ? [{ name: 'web', port: r.dev_port, primary: true }] : [] };
       });
   }
   nonTerminalTaskIds(): number[] {

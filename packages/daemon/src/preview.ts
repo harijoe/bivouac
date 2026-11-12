@@ -15,7 +15,7 @@ export interface ShareLink { id: number; taskId: number; createdAt: number; expi
 export type PreviewDecision =
   | { kind: 'allow'; cookieHeader: string }
   | { kind: 'redirect'; location: string; setCookie: string }
-  | { kind: 'deny'; reason: 'no_task' | 'no_access' | 'expired' };
+  | { kind: 'deny'; reason: 'no_task' | 'no_access' | 'expired' | 'revoked' };
 
 interface CookiePayload { h: string; k: 'owner' | 'share'; s?: number; e: number }
 
@@ -67,29 +67,32 @@ export class Previews {
     return r ? decrypt(this.secret, r.token_enc) : null;
   }
   revokeShare(id: number) { this.db.prepare('UPDATE share_links SET revoked=1 WHERE id=?').run(id); }
+  /** The share link behind a token of this task, whatever its state (the caller decides what an inactive one means). */
   private findShareByToken(token: string, taskId: number): ShareLink | null {
     const r = this.db.prepare('SELECT * FROM share_links WHERE token_hash=? AND task_id=?').get(sha256(token), taskId);
-    const s = r ? this.shareFromRow(r) : null;
-    return s?.active ? s : null;
+    return r ? this.shareFromRow(r) : null;
   }
+  private inactiveReason(s: ShareLink): 'expired' | 'revoked' { return s.revoked ? 'revoked' : 'expired'; }
 
   // ---- cookie
   private sign(p: CookiePayload): string {
     const body = Buffer.from(JSON.stringify(p)).toString('base64url');
     return `${body}.${createHmac('sha256', this.secret).update('preview:' + body).digest('base64url')}`;
   }
-  private verify(v: string, host: string): CookiePayload | null {
+  private verify(v: string, host: string): { p: CookiePayload } | { reason: 'expired' | 'revoked' | null } {
     const [body, mac] = v.split('.');
-    if (!body || !mac) return null;
-    if (!safeEqual(mac, createHmac('sha256', this.secret).update('preview:' + body).digest('base64url'))) return null;
+    if (!body || !mac) return { reason: null };
+    if (!safeEqual(mac, createHmac('sha256', this.secret).update('preview:' + body).digest('base64url'))) return { reason: null };
     let p: CookiePayload;
-    try { p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); } catch { return null; }
-    if (p.h !== host || p.e < this.now()) return null;
+    try { p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); } catch { return { reason: null }; }
+    if (p.h !== host) return { reason: null };
     if (p.k === 'share') {
       const s = p.s ? this.getShare(p.s) : null;
-      if (!s?.active) return null;
+      if (!s) return { reason: null };
+      if (!s.active) return { reason: this.inactiveReason(s) };
     }
-    return p;
+    if (p.e < this.now()) return { reason: p.k === 'share' ? 'expired' : null };
+    return { p };
   }
   private cookieHeaderFor(p: CookiePayload): string {
     const maxAge = Math.max(1, p.e - this.now());
@@ -97,11 +100,21 @@ export class Previews {
   }
 
   /** Finds the task behind a preview host: `<task>.<project>.<domain>` or `<port>.<task>.<project>.<domain>`. */
-  taskForHost(host: string): { id: number; name: string; project: string } | null {
+  taskForHost(host: string): { id: number; name: string; project: string; alias?: { label: string; publicPaths: string[] } } | null {
     const suffix = '.' + this.cfg.domain;
     if (!host.endsWith(suffix)) return null;
     const labels = host.slice(0, -suffix.length).split('.');
-    if (labels.length < 2 || labels.length > 3 || labels.some((l) => !l)) return null;
+    if (labels.length < 1 || labels.length > 3 || labels.some((l) => !l)) return null;
+    // `<alias>` or `<port>.<alias>`: the stable host a project gives to one of its tasks (an alias is never a project name)
+    if (labels.length === 1 || (labels.length === 2 && !this.store.getProjectByName(labels[1]))) {
+      const label = labels.at(-1)!;
+      const pr = this.store.getProjectByAlias(label);
+      const t = pr?.aliasTaskId ? this.store.getTask(pr.aliasTaskId) : null;
+      if (!pr || !t) return null;
+      if (labels.length === 2 && !t.ports.some((x) => x.name === labels[0] && !x.primary)) return null;
+      return { id: t.id, name: t.name, project: pr.name, alias: { label, publicPaths: pr.aliasPublicPaths } };
+    }
+    if (labels.length < 2) return null;
     const [portName, name, project] = labels.length === 3 ? labels : [null, labels[0], labels[1]];
     const p = this.store.getProjectByName(project);
     const t = p ? this.store.getTaskByName(p.id, name) : null;
@@ -123,27 +136,34 @@ export class Previews {
     // 1. one-time entry points carried in the URL: swap them for a host-bound cookie, then redirect without the secret
     let url: URL;
     try { url = new URL(uri, 'http://x'); } catch { url = new URL('http://x/'); }
+    const parts = cookieHeader.split(';').map((s) => s.trim()).filter(Boolean);
+    const rest = parts.filter((p) => !p.startsWith(PREVIEW_COOKIE + '=')).join('; ');
+    // paths the owner opened to the world on the project alias (webhooks, OAuth callbacks): no access check, no cookie to the app
+    if (task.alias && task.alias.publicPaths.some((pp) => (pp.endsWith('/') ? url.pathname.startsWith(pp) : url.pathname === pp))) return { kind: 'allow', cookieHeader: rest };
     const ticket = url.searchParams.get('bv_ticket');
     const share = url.searchParams.get('bv_share');
     if (ticket || share) {
       let payload: CookiePayload | null = null;
+      let why: 'expired' | 'revoked' | null = null;
       if (ticket && this.consumeTicket(ticket, task.id)) payload = { h: host.toLowerCase(), k: 'owner', e: this.now() + OWNER_COOKIE_TTL };
       else if (share) {
         const s = this.findShareByToken(share, task.id);
-        if (s) payload = { h: host.toLowerCase(), k: 'share', s: s.id, e: s.expiresAt ?? this.now() + 30 * 86400 };
+        if (s?.active) payload = { h: host.toLowerCase(), k: 'share', s: s.id, e: s.expiresAt ?? this.now() + 30 * 86400 };
+        else if (s) why = this.inactiveReason(s);
       }
-      if (!payload) return { kind: 'deny', reason: share ? 'expired' : 'no_access' };
+      if (!payload) return { kind: 'deny', reason: why ?? 'no_access' };
       url.searchParams.delete('bv_ticket');
       url.searchParams.delete('bv_share');
       return { kind: 'redirect', location: url.pathname + url.search, setCookie: this.cookieHeaderFor(payload) };
     }
 
     // 2. an existing preview cookie for this host
-    const parts = cookieHeader.split(';').map((s) => s.trim()).filter(Boolean);
     const mine = parts.find((p) => p.startsWith(PREVIEW_COOKIE + '='));
-    if (mine && this.verify(mine.slice(PREVIEW_COOKIE.length + 1), host.toLowerCase())) {
+    if (mine) {
+      const v = this.verify(mine.slice(PREVIEW_COOKIE.length + 1), host.toLowerCase());
       // the app must never see our cookie: hand back the rest of the header for Traefik to forward
-      return { kind: 'allow', cookieHeader: parts.filter((p) => !p.startsWith(PREVIEW_COOKIE + '=')).join('; ') };
+      if ('p' in v) return { kind: 'allow', cookieHeader: rest };
+      if (v.reason) return { kind: 'deny', reason: v.reason };
     }
     return { kind: 'deny', reason: 'no_access' };
   }

@@ -3,7 +3,7 @@ import { LineSplitter, mergeConfig, parseProjectConfig, parseStreamLine, resolve
 import type { DaemonConfig } from './config.js';
 import type { Store } from './db.js';
 import { createPullRequest, parseGithubRepo } from './git.js';
-import { previewUrl } from './routes.js';
+import { aliasUrl, previewUrl } from './routes.js';
 import { buildInitialPrompt, buildInstructionPrompt, buildRetryPrompt, describeEnvironment } from './prompt.js';
 import type { Sandbox } from './sandbox.js';
 import type { Project } from '@bivouac/shared';
@@ -27,6 +27,7 @@ export class TaskManager {
   private active = new Map<number, Active>();
   constructor(private store: Store, private cfg: DaemonConfig, private makeSandbox: SandboxFactory, private repoToken: RepoTokenProvider = async (p) => store.getProjectToken(p.id), private fetchImpl?: typeof fetch) {
     store.previewUrlFor = (project, name, portName) => previewUrl(cfg, project, name, portName);
+    store.aliasUrlFor = (alias, portName) => aliasUrl(cfg, alias, portName);
   }
 
   // ---- lifecycle
@@ -209,6 +210,7 @@ export class TaskManager {
     const project = this.store.getProject(task.projectId)!;
     const sb = a.sandbox;
     this.store.setStatus(id, 'starting');
+    this.store.setPreview(id, null);
 
     // 1. clone on the host (credentials stay out of the container) and create the task branch
     const token = await this.repoToken(project, 'read');
@@ -254,7 +256,8 @@ export class TaskManager {
     }
     let devKey = '';
     const writeDev = async () => {
-      const d = { command: eff.dev!.command, port: resolvePorts(eff)[0]?.port ?? 0, cwd: path.join(sb.ws, 'repo'), runtime: runtimeKey(runtime) };
+      const hp = eff.preview?.health;
+      const d = { command: eff.dev!.command, port: resolvePorts(eff)[0]?.port ?? 0, cwd: path.join(sb.ws, 'repo'), runtime: runtimeKey(runtime), healthPort: hp?.port ?? undefined, healthPath: hp?.path ?? undefined };
       const key = JSON.stringify(d);
       if (key !== devKey) { await sb.writeFile('.bivouac/dev.json', key); devKey = key; }
     };
@@ -285,11 +288,11 @@ export class TaskManager {
       if (a.stop) return this.finishStopped(id);
       if (JSON.stringify(eff.services ?? {}) !== servicesKey) { servicesKey = JSON.stringify(eff.services ?? {}); await startSandbox(); await watch.baseline(); }
       await writeDev();
-      const env = describeEnvironment({ ports: this.store.getTask(id)!.ports, services: Object.entries(eff.services ?? {}).map(([name, v]) => ({ name, image: v.image })), configError: this.store.getTask(id)!.configError });
+      const env = describeEnvironment({ aliasUrl: this.store.getTask(id)!.aliasUrl, ports: this.store.getTask(id)!.ports, services: Object.entries(eff.services ?? {}).map(([name, v]) => ({ name, image: v.image })), configError: this.store.getTask(id)!.configError });
       const instructions = this.store.takeInstructions(id);
       let prompt: string;
       if (!task.sessionId) {
-        prompt = buildInitialPrompt({ ports: this.store.getTask(id)!.ports, services: Object.entries(eff.services ?? {}).map(([name, v]) => ({ name, image: v.image })), configError: this.store.getTask(id)!.configError, prompt: task.prompt, branch: task.branch, baseBranch: task.baseBranch, previewUrl: task.previewUrl, runtime: describeRuntime(runtime), devCommand: dev.command, devLogPath: path.join(sb.ws, '.bivouac', 'dev.log'), successCommand: successCmd, iteration, maxIterations: task.maxIterations });
+        prompt = buildInitialPrompt({ aliasUrl: this.store.getTask(id)!.aliasUrl, ports: this.store.getTask(id)!.ports, services: Object.entries(eff.services ?? {}).map(([name, v]) => ({ name, image: v.image })), configError: this.store.getTask(id)!.configError, prompt: task.prompt, branch: task.branch, baseBranch: task.baseBranch, previewUrl: task.previewUrl, runtime: describeRuntime(runtime), devCommand: dev.command, devLogPath: path.join(sb.ws, '.bivouac', 'dev.log'), successCommand: successCmd, iteration, maxIterations: task.maxIterations });
         if (instructions.length) prompt += '\n\nAdditional instructions from the user:\n' + instructions.map((i) => `- ${i}`).join('\n');
       } else if (failure) {
         prompt = buildRetryPrompt({ checkOutput: failure.output, exitCode: failure.exitCode, successCommand: successCmd, instructions, iteration, maxIterations: task.maxIterations, env });
@@ -297,8 +300,8 @@ export class TaskManager {
         prompt = instructions.length ? buildInstructionPrompt(instructions, env) : `Continue working on the task. Make sure \`${successCmd}\` passes.${env.length ? '\n' + env.join('\n') : ''}`;
       }
       await watch.check();
-      const notices = watch.takeNotices();
-      if (notices.length) prompt += '\n\nNote from bivouac about the services of this task:\n' + notices.map((n) => `- ${n}`).join('\n');
+      const notices = [...watch.takeNotices(), ...this.store.takeNotices(id)];
+      if (notices.length) prompt += '\n\nNotes from bivouac about this task (services, preview):\n' + notices.map((n) => `- ${n}`).join('\n');
       this.store.setStatus(id, 'running');
       const run = await this.runClaude(id, a, sb, prompt, task, remaining, iteration);
       await watch.check();

@@ -27,6 +27,12 @@ export interface Project {
   config: import('./config.js').ProjectConfig;
   /** The Claude account this project uses; null = the default account. */
   claudeAccountId: number | null;
+  /** Stable host label (`<alias>.<domain>`) a project can point at one of its tasks; null when unused. */
+  alias: string | null;
+  /** The task the alias currently points at. */
+  aliasTaskId: number | null;
+  /** Paths of the aliased preview that skip the access check (webhooks, OAuth callbacks): exact path or a prefix ending in `/`. */
+  aliasPublicPaths: string[];
   createdAt: string;
 }
 
@@ -58,7 +64,7 @@ export interface PreviewHealth {
   updatedAt: string;
 }
 
-export interface TaskPort { name: string; port: number; primary: boolean; url: string }
+export interface TaskPort { name: string; port: number; primary: boolean; url: string; aliasUrl?: string }
 export interface TaskService { name: string; image: string }
 
 export interface Task {

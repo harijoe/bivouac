@@ -11,6 +11,7 @@ import type { TaskManager } from './runner.js';
 import { TOKEN_LIFETIME_DAYS } from './claude.js';
 import { resolveClaude } from './accounts.js';
 import type { Updates } from './updates.js';
+import type { PreviewWatch } from './preview-watch.js';
 import type { ProjectContext } from './projectcontext.js';
 import { attemptEvents, listAttempts, searchAttempts } from './attempts.js';
 
@@ -46,6 +47,10 @@ export interface TaskSummary {
   urls: { name: string; port: number; main: boolean; url: string }[];
   services: { name: string; image: string }[];
   configError: string | null;
+  /** Health of the dev server (unhealthy / down: the preview is unavailable, `lastCause` says why). */
+  preview: { state: string; since: string; restarts: number; lastCause: string | null } | null;
+  /** Stable URL when the project alias points at this task. */
+  aliasUrl: string | null;
 }
 
 /** Everything the dashboard and the MCP server can do. One place for validation, messages and the audit trail. */
@@ -53,6 +58,7 @@ export class Service {
   /** Set after construction (the updater needs the task manager). */
   updates: Updates | null = null;
   pctx!: ProjectContext;
+  pwatch!: PreviewWatch;
   constructor(public store: Store, public cfg: DaemonConfig, public mgr: TaskManager, public auth: Auth, public gh: GithubApp, public previews: Previews, private fetchImpl: typeof fetch = fetch) {}
 
   // ---- links
@@ -178,7 +184,7 @@ export class Service {
     const repo = repos.find((r) => r.fullName.toLowerCase() === o.fullName.toLowerCase());
     if (!repo) throw new UserError(`Repository ${o.fullName} is not available to the GitHub App. Give the app access to it on GitHub (Settings > GitHub > Choose repositories).`, 'repo_not_installed', 404);
     const name = slugify(o.name ?? repo.fullName.split('/')[1], 24);
-    if (this.store.getProjectByName(name)) throw new UserError(`A project named "${name}" already exists. Pick another name.`, 'name_taken', 409);
+    if (this.store.getProjectByName(name) || this.store.getProjectByAlias(name)) throw new UserError(`A project named "${name}" already exists (or the name is used as a preview alias). Pick another name.`, 'name_taken', 409);
     const p = this.store.createProject({ name, repoUrl: `https://github.com/${repo.fullName}.git`, defaultBranch: repo.defaultBranch, githubRepo: repo.fullName, installationId: repo.installationId });
     this.auth.audit(actor.label, 'project_added', { project: name, repo: repo.fullName });
     return p;
@@ -188,7 +194,7 @@ export class Service {
     const repoUrl = o.repoUrl.trim();
     if (!repoUrl) throw new UserError('repoUrl is required', 'invalid');
     const name = slugify(o.name ?? repoUrl.split('/').pop()!.replace(/\.git$/, ''), 24);
-    if (this.store.getProjectByName(name)) throw new UserError(`A project named "${name}" already exists. Pick another name.`, 'name_taken', 409);
+    if (this.store.getProjectByName(name) || this.store.getProjectByAlias(name)) throw new UserError(`A project named "${name}" already exists (or the name is used as a preview alias). Pick another name.`, 'name_taken', 409);
     let branch: string;
     const gh = /github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(repoUrl);
     if (gh && o.token) {
@@ -217,6 +223,7 @@ export class Service {
       costUsd: t.usage.costUsd, costKind: this.costKind(t.projectId), maxCostUsd: t.maxCostUsd, maxTokens: t.maxTokens, successCommand: t.successCommand, tokens: t.usage.inputTokens + t.usage.outputTokens + t.usage.cacheCreationTokens,
       previewUrl: t.previewUrl, dashboardUrl: this.taskUrl(t), prUrl: t.prUrl, pushed: t.pushed, branch: t.branch, error: t.error, createdAt: t.createdAt, finishedAt: t.finishedAt,
       urls: t.ports.map((p) => ({ name: p.name, port: p.port, main: p.primary, url: p.url })), services: t.services, configError: t.configError,
+      preview: t.preview ? { state: t.preview.state, since: t.preview.since, restarts: t.preview.restarts, lastCause: t.preview.cause } : null, aliasUrl: t.aliasUrl,
     };
   }
   resolveTask(projectRef: string | number | undefined, taskRef: string | number): Task {
@@ -407,10 +414,11 @@ export class Service {
     this.previews.revokeShare(id);
     this.auth.audit(actor.label, 'share_revoked', { task: t.name, id });
   }
-  ownerPreviewUrl(t: Task, portName?: string) {
+  ownerPreviewUrl(t: Task, portName?: string, viaAlias = false) {
     const port = portName ? t.ports.find((p) => p.name === portName) : t.ports.find((p) => p.primary);
     if (portName && !port) throw new UserError(`This task has no port "${portName}". Available: ${t.ports.map((p) => p.name).join(', ')}.`, 'unknown_port', 404);
-    return `${port?.url ?? t.previewUrl}/?bv_ticket=${this.previews.createTicket(t.id)}`;
+    if (viaAlias && !port?.aliasUrl) throw new UserError('The project alias does not point at this task.', 'no_alias', 409);
+    return `${(viaAlias ? port?.aliasUrl : port?.url) ?? t.previewUrl}/?bv_ticket=${this.previews.createTicket(t.id)}`;
   }
 
   // ---- history by attempt
@@ -420,6 +428,55 @@ export class Service {
   }
   attemptEvents(t: Task, attempt: number) { return attemptEvents(this.store.db, t.id, attempt); }
   searchAttempts(t: Task, text: string) { return searchAttempts(this.store.db, t.id, text); }
+
+  // ---- preview: alias and restart
+  /**
+   * Defines the alias of a project (the host label `<alias>.<domain>`), the task it points at and the paths that skip the access
+   * check. Each part is optional; `alias: null` removes the alias, `task: null` leaves it pointing nowhere.
+   */
+  setAlias(projectRef: string | number, o: { alias?: string | null; task?: string | number | null; publicPaths?: string[] }, actor: Actor) {
+    const p = this.resolveProject(projectRef);
+    const patch: { alias?: string | null; taskId?: number | null; publicPaths?: string[] } = {};
+    if (o.alias !== undefined) {
+      if (o.alias === null || o.alias === '') patch.alias = null;
+      else {
+        const a = String(o.alias).trim().toLowerCase();
+        if (!/^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/.test(a)) throw new UserError(`"${a}" is not a valid alias. Use lowercase letters, digits and dashes (1 to 30 characters), for example "app".`, 'invalid');
+        if (['www', 'api', 'mail', 'admin', 'traefik', 'web', 'executor', 'bv-dns-check'].includes(a)) throw new UserError(`The alias "${a}" is reserved. Choose another, for example "app".`, 'invalid');
+        if (this.store.getProjectByName(a)) throw new UserError(`"${a}" is the name of a project and cannot be an alias. Choose another.`, 'name_taken', 409);
+        if (this.store.aliasTaken(a, p.id)) throw new UserError(`The alias "${a}" is already used by another project.`, 'name_taken', 409);
+        patch.alias = a;
+      }
+    }
+    if (o.publicPaths !== undefined) {
+      if (!Array.isArray(o.publicPaths) || o.publicPaths.length > 10) throw new UserError('Give at most 10 public paths, for example ["/api/webhooks/"].', 'invalid');
+      for (const x of o.publicPaths) if (typeof x !== 'string' || !/^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,200}$/.test(x) || x.split('/').includes('..') || x === '/') throw new UserError(`"${String(x)}" is not an allowed public path: it must start with / and cannot be the whole site. End it with / to open everything below it (for example /api/webhooks/).`, 'invalid');
+      patch.publicPaths = o.publicPaths;
+    }
+    const before = p.aliasTaskId ? this.store.getTask(p.aliasTaskId) : null;
+    if (o.task !== undefined) {
+      if (o.task === null || o.task === '') patch.taskId = null;
+      else {
+        if (!(patch.alias ?? p.alias)) throw new UserError('This project has no alias yet. Define one first (project settings), for example "app".', 'no_alias', 412);
+        const t = this.resolveTask(p.id, o.task);
+        patch.taskId = t.id;
+      }
+    }
+    if (patch.alias === null) patch.taskId = null;
+    this.store.setProjectAlias(p.id, patch);
+    const after = this.store.getProject(p.id)!;
+    const now = after.aliasTaskId ? this.store.getTask(after.aliasTaskId) : null;
+    if (before && before.id !== now?.id) this.store.addEvent(before.id, 'system', { subtype: 'alias_released', message: `The alias ${p.alias ?? ''} no longer points at this task.` });
+    if (now && before?.id !== now.id) this.store.addEvent(now.id, 'system', { subtype: 'alias_assigned', message: `The alias ${now.aliasUrl} now points at this task.`, url: now.aliasUrl });
+    this.auth.audit(actor.label, 'alias_changed', { project: p.name, ...patch });
+    return after;
+  }
+  async restartPreview(t: Task, actor: Actor) {
+    if (!(await this.mgr.sandboxFor(t).isRunning())) throw new UserError('The task container is not running. Resume the task first.', 'not_running', 409);
+    await this.pwatch.restart(t);
+    this.auth.audit(actor.label, 'preview_restarted', { task: t.name, project: t.projectName });
+    return this.store.getTask(t.id)!;
+  }
 
   // ---- diffs
   /** The two sides of the diff of an attempt (or of the whole task against its base branch). */

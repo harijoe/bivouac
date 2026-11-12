@@ -260,11 +260,13 @@ export function createInternalApp(ctx: Ctx) {
     }
     const dash = baseUrl(ctx.cfg);
     const gone = d.reason === 'no_task';
-    const msg = gone ? 'This preview does not exist (anymore).' : d.reason === 'expired' ? 'This share link has expired or was revoked.' : 'This preview is private.';
-    const hint = gone ? 'The task may have been renamed or deleted. Ask the person who sent you the link for a new one.' : 'Ask the owner for a share link, or open the preview from your bivouac dashboard.';
-    return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access denied</title>
+    const lapsed = d.reason === 'expired' || d.reason === 'revoked';
+    const title = gone ? 'Preview not found' : lapsed ? (d.reason === 'expired' ? 'This link has expired' : 'This link was revoked') : 'Access denied';
+    const msg = gone ? 'This preview does not exist (anymore).' : d.reason === 'expired' ? 'The share link you used is no longer valid because its time ran out.' : d.reason === 'revoked' ? 'The owner turned this share link off.' : 'This preview is private.';
+    const hint = gone ? 'The task may have been renamed or deleted. Ask the person who sent you the link for a new one.' : lapsed ? 'Ask the person who sent you the link for a new one.' : 'Ask the owner for a share link, or open the preview from your bivouac dashboard.';
+    return c.html(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
 <style>body{font:16px/1.5 system-ui,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f9;color:#14181f}@media(prefers-color-scheme:dark){body{background:#0e1116;color:#e6e9ee}a{color:#7fb0ff}}main{max-width:26rem;padding:2rem;text-align:center}h1{font-size:1.25rem;margin:.5rem 0}p{margin:.5rem 0;opacity:.8}</style></head>
-<body><main><div style="font-size:2.5rem">🔒</div><h1>Access denied</h1><p>${msg}</p><p>${hint}</p><p><a href="${dash}">Open the dashboard</a></p></main></body></html>`, gone ? 404 : 403, { 'Cache-Control': 'no-store' });
+<body><main><div style="font-size:2.5rem">${lapsed ? '⏳' : '🔒'}</div><h1>${title}</h1><p>${msg}</p><p>${hint}</p><p><a href="${dash}">Open the dashboard</a></p></main></body></html>`, gone ? 404 : 403, { 'Cache-Control': 'no-store' });
   });
   return app;
 }

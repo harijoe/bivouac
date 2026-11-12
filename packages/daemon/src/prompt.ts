@@ -12,14 +12,17 @@ export interface PromptContext {
   maxIterations: number;
   ports?: { name: string; port: number; primary: boolean; url: string }[];
   configError?: string | null;
+  /** Stable URL when the project's alias points at this task. */
+  aliasUrl?: string | null;
   services?: { name: string; image: string; env?: Record<string, string> }[];
   /** Tool versions installed for the task, as `node 26, pnpm 11`. */
   runtime?: string;
 }
 
 /** What the agent needs to know about ports and sidecars, and how to change them. Shown at every session start. */
-export function describeEnvironment(c: Pick<PromptContext, 'ports' | 'services'> & { configError?: string | null }): string[] {
+export function describeEnvironment(c: Pick<PromptContext, 'ports' | 'services'> & { configError?: string | null; aliasUrl?: string | null }): string[] {
   const out: string[] = [];
+  if (c.aliasUrl) out.push(`- This task is where the project's stable alias points: ${c.aliasUrl}. Use that URL (not the task URL) for OAuth redirect URIs and webhooks of the app you are building; it stays the same when the alias moves to another task.`);
   if (c.ports && c.ports.length > 1) {
     out.push('- Exposed ports: ' + c.ports.map((p) => `${p.name} (port ${p.port})${p.url ? ` at ${p.url}` : ''}${p.primary ? ' [main]' : ''}`).join('; ') + '.');
   }
@@ -56,6 +59,8 @@ export function buildInitialPrompt(c: PromptContext): string {
       : '- No dev server is configured.',
     `- Success criterion: this command must exit with status 0 — \`${c.successCommand}\`. It is run automatically after you finish; if it fails you will be asked to fix it (iteration ${c.iteration}/${c.maxIterations}). Run it yourself before finishing.`,
     ...describeEnvironment(c),
+    '- bivouac watches the dev server: if it dies or stops answering it is restarted with a growing delay (and you are told in your next session). Its state is in `/workspace/.bivouac/health.json`. To restart it yourself: `touch /workspace/.bivouac/restart.req`. A health path other than `/` can be set with `preview: { health: { path: /health } }` in `bivouac.yml`.',
+    '- After each attempt bivouac opens the pages listed under `preview: { screenshots: ["/", "/login"] }` in `bivouac.yml` (default `/`) at 375 px and 1280 px wide, and records errors from the browser console, so keep those pages free of errors.',
     ...describeTooling(c.runtime),
   ].join('\n');
 }

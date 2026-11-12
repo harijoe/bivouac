@@ -17,6 +17,7 @@ const ctx = buildContext({ cfg, store, makeSandbox: (t) => executor.sandbox(t.id
 ctx.updates.recordOutcome();
 ctx.updates.startBackground();
 ctx.mgr.recover();
+ctx.svc.pwatch.start();
 serve({ fetch: createApp(ctx).fetch, port: cfg.port, hostname: cfg.bind }, (i) => console.log(`bivouac web listening on ${i.address}:${i.port}`));
 serve({ fetch: createInternalApp(ctx).fetch, port: cfg.internalPort, hostname: cfg.bind }, (i) => console.log(`bivouac internal listener on ${i.address}:${i.port}`));
 for (const s of ['SIGTERM', 'SIGINT'] as const) process.on(s, () => process.exit(0));
