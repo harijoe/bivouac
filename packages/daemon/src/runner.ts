@@ -149,7 +149,7 @@ export class TaskManager {
     if (!gh) throw new Error('Project is not connected to GitHub: only GitHub repositories support pull requests.');
     const token = await this.repoToken(project, 'write');
     if (!token) throw new Error('Project is not connected to GitHub: no credential is available for this repository.');
-    await this.push(id);
+    if (!t.pushed || (await this.unpushedCommits(t)) > 0) await this.push(id);
     const url = await createPullRequest({
       token, ...gh, head: t.branch, base: t.baseBranch, title: t.title,
       body: `${t.prompt}\n\n---\nStatus: ${t.status} after ${t.iteration} iteration(s). Created by bivouac task ${t.name}.`, fetchImpl: this.fetchImpl,
