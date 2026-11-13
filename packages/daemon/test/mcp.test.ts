@@ -58,7 +58,7 @@ describe('MCP server', () => {
     expect(json(await c.callTool({ name: 'get_task', arguments: { project: 'demo', task: 'login-page' } })).shareLinks).toHaveLength(0);
 
     const stopped = json(await c.callTool({ name: 'stop_task', arguments: { project: 'demo', task: 'slow-one' } }));
-    expect(stopped.status).toBe('stopped');
+    expect({ status: stopped.status, error: stopped.error }).toEqual({ status: 'stopped', error: null });
     expect(json(await c.callTool({ name: 'list_tasks', arguments: { status: 'stopped' } }))).toHaveLength(1);
     // audit trail
     const audit = env.ctx.auth.listAudit().map((a) => a.action);
