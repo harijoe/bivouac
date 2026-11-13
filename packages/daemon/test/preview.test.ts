@@ -114,7 +114,7 @@ describe('preview access control (forwardAuth)', () => {
   it('the dashboard route requires no forwardAuth, task routes do', async () => {
     const { env, t } = setup();
     const conf: any = await (await env.internal.request('/internal/traefik')).json();
-    expect(conf.http.routers['bivouac-web'].middlewares).toBeUndefined();
+    expect(conf.http.routers['bivouac-web'].middlewares).toEqual(['bivouac-restarting']);
     expect(conf.http.routers[`bivouac-t${t.id}`].middlewares).toEqual(['bivouac-preview-auth']);
   });
 });

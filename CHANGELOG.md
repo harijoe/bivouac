@@ -11,6 +11,9 @@ Agents get a browser, current library documentation and design skills, and proje
 - **Skills**: `frontend-design` and `webapp-testing` (anthropics/skills, Apache-2.0, pinned commit) in the task image; **`skills:` in `bivouac.yml`** installs catalogue skills (first entry: `taste-skill`, MIT, pinned) from a cache on the server. The repository's own `.claude/skills` keeps working. Catalogue skills lose their `hooks:` block: taste-skill's 600 s Stop gate cannot block or extend an attempt; the success check is unchanged.
 - The task page ("Agent tools") and `get_task` (`tooling`) show which MCP servers (with the status the CLI reported) and skills the agent had.
 
+### Fixed
+- Updating from the dashboard no longer shows Traefik's raw "Bad Gateway": the update page shows "Restarting…" with a loader and reloads by itself once the new version answers `/api/health`, and Traefik serves a static "bivouac is restarting, this page reloads by itself" page (auto-refresh) on the dashboard host while `bivouac-web` is unreachable. This adds a small `bivouac-pages` container (`busybox:1.37`, about 1.5 MB) next to Traefik.
+
 ### Image
 - Task image: about +84 MB on disk, +12 MB compressed (628 MB to 640 MB) for the two MCP servers and the skills; Chromium was already there. The two default MCP servers add about 700 cached input tokens per request (measured); switch them off for tasks that never touch a UI.
 
