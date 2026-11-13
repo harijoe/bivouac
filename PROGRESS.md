@@ -1,5 +1,12 @@
 # PROGRESS
 
+## Journal v0.5.1 (2026-11-13)
+Release des correctifs de la revue v0.5, sans nouveau code.
+- `## Unreleased` → `## 0.5.1` (phrase d'introduction), `DEFAULT_VERSION` et les quatre `package.json` à 0.5.1 (commit c50ac2f), tag `v0.5.1`.
+- CI verte sur le commit (`main`) et sur le tag (test, integration, images) ; images `ghcr.io/harijoe/bivouac-{daemon,task}` `0.5.1` tirées en anonyme (DOCKER_CONFIG vide).
+- Release GitHub **en brouillon** (id 444008219) avec les notes de la section 0.5.1 : tu la publies (elle est liée au tag `v0.5.1` à la publication), puis tu testes la mise à jour 0.5.0 → 0.5.1 depuis le dashboard.
+- Non rejoué : les chemins d'échec de `apply.sh` sur VM (voir journal de la revue).
+
 ## Mission revue v0.5 (2026-11-12)
 Six revues parallèles, chaque constat soumis à un vérificateur indépendant, puis correctifs (un commit par correctif, 19 commits de `0fd4d40` à `b29159f`). Détail, constats rejetés et constats reportés : `docs/review-v0.5.md` ; CHANGELOG `## 0.5.1`. Publié en 0.5.1 (voir le journal 0.5.1).
 - **Corrigé, sécurité (P0)** : l'agent pouvait faire exécuter des commandes à l'exécuteur via `.git/config` (fsmonitor, filtres, textconv), envoyer le token d'écriture à une autre URL (`remote.origin.url`/`pushurl`) et faire lire/tronquer des fichiers de l'exécuteur par des liens symboliques. Tests de non-régression ajoutés.
