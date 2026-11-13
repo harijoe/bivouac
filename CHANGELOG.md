@@ -15,7 +15,7 @@ Agents get a browser, current library documentation and design skills, and proje
 - Updating from the dashboard no longer shows Traefik's raw "Bad Gateway": the update page shows "Restarting…" with a loader and reloads by itself once the new version answers `/api/health`, and Traefik serves a static "bivouac is restarting, this page reloads by itself" page (auto-refresh) on the dashboard host while `bivouac-web` is unreachable. This adds a small `bivouac-pages` container (`busybox:1.37`, about 1.5 MB) next to Traefik.
 
 ### Image
-- Task image: about +84 MB on disk, +12 MB compressed (628 MB to 640 MB) for the two MCP servers and the skills; Chromium was already there. The two default MCP servers add about 700 cached input tokens per request (measured); switch them off for tasks that never touch a UI.
+- Task image: about +27 MB on disk and +3 MB compressed against 0.5.1 (2272 MB to 2299 MB, 628 MB to 631 MB; Chromium was already there) for the two MCP servers and the skills. A first build of this release was +96 MB / +12 MB: the MCP install is now pruned (no `@types`, only the OpenTelemetry API Context7 imports at start, no source maps, type declarations or readmes) and the image carries a single `playwright-core` (the one of `@playwright/mcp`, 1.66, which the screenshot script now uses). The two default MCP servers add about 700 cached input tokens per request (measured); switch them off for tasks that never touch a UI.
 
 ## 0.5.1
 

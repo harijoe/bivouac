@@ -8,15 +8,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-cer
     && npm install -g pnpm@10 @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm cache clean --force
 # Screenshots: after each attempt shot.mjs opens the preview pages in headless Chromium (Debian's, with fonts) through playwright-core,
-# which is only the driver (no browser download).
+# which is only the driver (no browser download); the single copy ships with @playwright/mcp below and is linked here.
 RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /opt/bivouac && npm install --prefix /opt/bivouac --no-audit --no-fund --omit=dev playwright-core@1.65.0 && npm cache clean --force
+    && mkdir -p /opt/bivouac/node_modules
 ENV BIVOUAC_CHROMIUM=/usr/bin/chromium
 # MCP servers handed to the agent (pinned): Playwright MCP drives the Chromium above, Context7 serves library documentation.
+# After the install: no @types, only the OpenTelemetry API that Context7 imports at start (its exporters load only when the embedded
+# Prometheus endpoint is on), no source maps, type declarations or readmes (licence files stay), and one playwright-core for everyone.
 ARG PLAYWRIGHT_MCP_VERSION=0.0.85
 ARG CONTEXT7_MCP_VERSION=4.7.0
-RUN mkdir -p /opt/bivouac/mcp && npm install --prefix /opt/bivouac/mcp --no-audit --no-fund --omit=dev @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} @upstash/context7-mcp@${CONTEXT7_MCP_VERSION} && npm cache clean --force
+RUN mkdir -p /opt/bivouac/mcp && npm install --prefix /opt/bivouac/mcp --no-audit --no-fund --omit=dev @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} @upstash/context7-mcp@${CONTEXT7_MCP_VERSION} \
+    && cd /opt/bivouac/mcp/node_modules && rm -rf @types && find @opentelemetry -mindepth 1 -maxdepth 1 ! -name api -exec rm -rf {} + \
+    && find . -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -iname 'README*' -o -iname 'CHANGELOG*' -o -iname 'HISTORY*' \) -delete \
+    && ln -s ../mcp/node_modules/playwright-core /opt/bivouac/node_modules/playwright-core \
+    && node -e "require('/opt/bivouac/node_modules/playwright-core')" && npm cache clean --force
 # Skills for the agent (Apache-2.0, licence files kept next to each skill), pinned to a commit of github.com/anthropics/skills.
 ARG ANTHROPIC_SKILLS_COMMIT=2c5958ecac7cee2b583967a2c4981d0f4a75c579
 RUN git init -q /tmp/anthropic-skills && cd /tmp/anthropic-skills \
