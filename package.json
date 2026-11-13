@@ -2,7 +2,7 @@
   "name": "bivouac",
   "private": true,
   "type": "module",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "license": "MIT",
   "packageManager": "pnpm@10.18.0",
   "engines": {

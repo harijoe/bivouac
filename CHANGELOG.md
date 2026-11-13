@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0
+
+Agents get a browser, current library documentation and design skills, and projects can add their own MCP servers and skills (details: `docs/agent-tools.md`).
+
+### Added
+- **Playwright MCP** (`@playwright/mcp` 0.0.85, headless, the Chromium already in the image) for every task agent: it can open its own dev server on `localhost` (every port of `ports:`), resize to 375 px and 1280 px, click and read the console. The prompt tells the agent to check every UI change on the running preview before it considers the work finished.
+- **Context7 MCP** (`@upstash/context7-mcp` 4.7.0) for up-to-date library docs; works without a key, an administrator can add one in Settings > Context7.
+- **`mcp:` in `bivouac.yml`**: your own stdio or HTTP MCP servers, `playwright: false` / `context7: false` to turn the defaults off. Secrets are entered by an administrator in the project settings (encrypted, write-only, masked in the history, passed to the agent as environment variables, never in the generated config), and a server that asks for secrets must be approved in the dashboard for its exact definition.
+- **Skills**: `frontend-design` and `webapp-testing` (anthropics/skills, Apache-2.0, pinned commit) in the task image; **`skills:` in `bivouac.yml`** installs catalogue skills (first entry: `taste-skill`, MIT, pinned) from a cache on the server. The repository's own `.claude/skills` keeps working. Catalogue skills lose their `hooks:` block: taste-skill's 600 s Stop gate cannot block or extend an attempt; the success check is unchanged.
+- The task page ("Agent tools") and `get_task` (`tooling`) show which MCP servers (with the status the CLI reported) and skills the agent had.
+
+### Image
+- Task image: about +84 MB on disk, +12 MB compressed (628 MB to 640 MB) for the two MCP servers and the skills; Chromium was already there. The two default MCP servers add about 700 cached input tokens per request (measured); switch them off for tasks that never touch a UI.
+
 ## 0.5.1
 
 Fixes from a full review of 0.5.0: two security issues in what an agent can make the host do, a more reliable update and restart path, and many smaller fixes (details in `docs/review-v0.5.md`).

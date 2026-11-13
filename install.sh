@@ -18,7 +18,7 @@
 #   BIVOUAC_SOURCE_DIR         developer option: build the images from a source checkout instead of pulling them
 set -euo pipefail
 
-DEFAULT_VERSION="0.5.1"
+DEFAULT_VERSION="0.6.0"
 BV_VERSION="${BIVOUAC_VERSION:-$DEFAULT_VERSION}"
 REGISTRY="${BIVOUAC_REGISTRY:-ghcr.io/harijoe}"
 ETC=/etc/bivouac
