@@ -150,6 +150,22 @@ for (const t of store.listTasks()) await ctx.mgr.settled(t.id).catch(() => {});
   store.db.prepare("UPDATE env_snapshots SET uses=2, created_at=?, last_used_at=? WHERE fingerprint=?").run(iso(12 * 86400_000), iso(4 * 86400_000), 'b'.repeat(64));
   store.setLastFingerprint(p.id, 'a'.repeat(64));
 }
+{
+  const dm = store.getTaskByName(p.id, 'dark-mode'), co = store.getTaskByName(p.id, 'checkout-fix');
+  if (dm) store.setTooling(dm.id, { mcp: [
+    { name: 'playwright', kind: 'builtin', transport: 'stdio', status: 'connected' },
+    { name: 'context7', kind: 'builtin', transport: 'stdio', status: 'connected' },
+    { name: 'linear', kind: 'project', transport: 'http', status: 'skipped', note: 'secret LINEAR_API_KEY not set in the project settings' },
+    { name: 'internal-docs-with-a-rather-long-name', kind: 'project', transport: 'stdio', status: 'failed', note: 'the CLI reported: failed' }],
+    skills: [{ name: 'frontend-design', source: 'image' }, { name: 'webapp-testing', source: 'image' }, { name: 'design-taste-frontend', source: 'catalogue' }, { name: 'release-notes', source: 'repository' }] });
+  if (co) store.setTooling(co.id, { mcp: [{ name: 'playwright', kind: 'builtin', transport: 'stdio', status: 'configured' }], skills: [{ name: 'frontend-design', source: 'image' }] });
+  store.setProjectSecret(p.id, 'LINEAR_API_KEY_FOR_THE_PRODUCTION_WORKSPACE', 'demo-secret-value'); store.setProjectSecret(p.id, 'DOCS_TOKEN', 'demo-secret-value-2');
+  const spec1 = { url: 'https://mcp.linear.app/mcp', headers: { Authorization: 'Bearer ${LINEAR_API_KEY}' }, secrets: ['LINEAR_API_KEY'] };
+  const spec2 = { command: 'npx', args: ['-y', '@acme/docs-mcp@2.1.0'], secrets: ['DOCS_TOKEN'] };
+  store.noteMcpServer(p.id, 'linear', 'f1'.repeat(16), spec1);
+  store.noteMcpServer(p.id, 'docs', 'e2'.repeat(16), spec2); store.setMcpApproval(p.id, 'docs', 'e2'.repeat(16), true);
+  store.setSecretSetting('context7_api_key', 'ctx7sk-demo');
+}
 ctx.svc.auth.audit('julien', 'login');
 const setupCode = ctx.auth.createSetupCode();
 const client = ctx.oauth.registerClient({ client_name: 'Claude', redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] });

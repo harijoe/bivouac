@@ -42,6 +42,7 @@ const screens = [
   { name: 'task-stuck', path: taskPath('flaky-e2e'), settle: 1000 },
   { name: 'settings-claude', path: '/settings/claude' },
   { name: 'settings-projects', path: '/settings/projects', settle: 1500, full: true },
+  { name: 'settings-context7', path: '/settings/context7' },
   { name: 'settings-chat', path: '/settings/chat' },
   { name: 'settings-domain', path: '/settings/domain' },
   { name: 'settings-updates', path: '/settings/updates' },
