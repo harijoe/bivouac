@@ -37,7 +37,7 @@ describe('MCP server', () => {
     const again = json(await c.callTool({ name: 'create_task', arguments: { project: 'demo', name: 'login-page', prompt: 'build it', idempotency_key: 'k1' } }));
     expect(again.id).toBe(a.id); expect(again.started).toBe(false);
 
-    const b = json(await c.callTool({ name: 'create_task', arguments: { project: 'demo', name: 'slow-one', prompt: 'x FAKE_DELAY=400 FAKE_SCENARIO=always-fail', success_command: 'false' } }));
+    const b = json(await c.callTool({ name: 'create_task', arguments: { project: 'demo', name: 'slow-one', prompt: 'x FAKE_DELAY=15000 FAKE_SCENARIO=always-fail', success_command: 'false' } }));
     expect(b.id).not.toBe(a.id);
 
     let t: any;
