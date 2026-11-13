@@ -105,7 +105,7 @@ if (!REAL) {
 
 title(REAL ? 'a real task with the official claude CLI' : 'two parallel tasks with the fake claude');
 const specs = REAL
-  ? [['alpha', 'Add a button that increments a counter on the home page, with a test.', 'pnpm test && pnpm build']]
+  ? [['alpha', 'Add a button that increments a counter on the home page, with a test. Use the frontend-design skill for how it looks.', 'pnpm test && pnpm build']]
   : [['alpha', 'task A', 'pnpm test && pnpm build'], ['beta', 'task B FAKE_SCENARIO=fail-then-succeed', 'grep -q ok fake-output.txt && pnpm test']];
 const created = {};
 for (const [name, prompt, success] of specs) {
@@ -122,6 +122,20 @@ await waitFor(async () => {
 }, REAL ? 900000 : 360000, 4000, 'tasks to finish');
 for (const [name] of specs) check(finals[name].status === 'succeeded', `${name} succeeded (iteration ${finals[name].iteration}, $${finals[name].costUsd.toFixed(3)})`);
 if (!REAL) check(finals.beta.iteration === 2, 'beta needed a second iteration (failure fed back to the agent)');
+
+if (REAL) {
+  title('v0.6: the agent used the Playwright MCP and a skill');
+  const evs = (await dash('GET', `/api/tasks/${created.alpha.id}/events`)).json;
+  const uses = evs.filter((e) => e.kind === 'tool_use').map((e) => e.data);
+  const pw = uses.filter((u) => /^mcp__playwright__browser_/.test(u.name));
+  const skill = uses.find((u) => u.name === 'Skill');
+  const tooling = finals.alpha.tooling;
+  check(tooling?.mcp.some((m) => m.name === 'playwright' && m.status === 'connected') && tooling.mcp.some((m) => m.name === 'context7'), `get_task lists the MCP servers: ${tooling?.mcp.map((m) => `${m.name}:${m.status}`).join(', ')}`);
+  check(['frontend-design', 'webapp-testing'].every((n) => tooling.skills.some((k) => k.name === n)), `get_task lists the skills: ${tooling?.skills.map((k) => k.name).join(', ')}`);
+  check(pw.length >= 2, `the agent called the Playwright MCP ${pw.length} times (${[...new Set(pw.map((u) => u.name.replace('mcp__playwright__', '')))].join(', ')})`);
+  check(pw.some((u) => u.name.endsWith('browser_navigate') && /localhost|\.demo\./.test(JSON.stringify(u.input))), 'it opened its own preview in the browser');
+  check(!!skill, `the agent loaded a skill (${JSON.stringify(skill?.input)})`);
+}
 
 title('v0.5: diff, screenshots and preview health of a finished task');
 const d1 = toolJson(await call('get_attempt_diff', { project: 'demo', task: 'alpha', attempt: 1 }));
