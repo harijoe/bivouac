@@ -109,7 +109,7 @@ const specs = REAL
   : [['alpha', 'task A', 'pnpm test && pnpm build'], ['beta', 'task B FAKE_SCENARIO=fail-then-succeed', 'grep -q ok fake-output.txt && pnpm test']];
 const created = {};
 for (const [name, prompt, success] of specs) {
-  const r = await call('create_task', { project: 'demo', name, prompt, success_command: success, max_iterations: 4, max_cost_usd: REAL ? 1.5 : 5, idempotency_key: `e2e-${name}` });
+  const r = await call('create_task', { project: 'demo', name, prompt, success_command: success, max_iterations: 4, max_cost_usd: REAL ? 3 : 5, idempotency_key: `e2e-${name}` });
   created[name] = toolJson(r);
   check(created[name].previewUrl === previewUrl(name, 'demo') && created[name].started, `create_task ${name} answered immediately with preview ${created[name].previewUrl}`);
 }
