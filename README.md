@@ -113,6 +113,10 @@ budget: { max_iterations: 10, max_cost_usd: 20 }
 
 See [`examples/vite-app`](examples/vite-app) (one port) and [`examples/multi-app`](examples/multi-app) (front + API + Postgres). The old `dev: { command, port }` form still works.
 
+### Browser, documentation and skills for the agent
+
+Agents get a Playwright MCP (a headless browser to check their UI at 375 px and 1280 px), Context7 (current library docs) and the `frontend-design` and `webapp-testing` skills by default. `mcp:` adds your own MCP servers (with secrets entered in the dashboard) or turns the defaults off; `skills:` adds catalogue skills such as `taste-skill`. Details, secrets, approval and hooks: [`docs/agent-tools.md`](docs/agent-tools.md).
+
 ### Tool versions (Node, pnpm, Python, Go, Rust…)
 
 The task image ships Node 22, but tasks use the versions your repository asks for. When a task starts, bivouac reads these files at the root of the repository — `mise.toml`, `.tool-versions`, `.nvmrc`, `.node-version`, `package.json` (`engines.node`, `packageManager`), `.python-version`, `go.mod`, `rust-toolchain(.toml)` — and installs the versions with [mise](https://mise.jdx.dev), without root, into a cache volume shared by the tasks of the project (only the first task downloads). They are on the `PATH` of `setup`, `dev`, `success` and of the agent. For `engines.node` (a range) the lowest version of the range is installed. When several files disagree the strongest wins: `package.json` < `.nvmrc` / `.node-version` < `.tool-versions` < `mise.toml` < `runtime:` in `bivouac.yml`. `runtime:` always wins; quote versions such as `"3.10"` so YAML keeps the zero.
