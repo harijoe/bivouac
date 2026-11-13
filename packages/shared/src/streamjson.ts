@@ -45,7 +45,7 @@ export function parseStreamLine(line: string): ParsedEvent[] {
   const out: ParsedEvent[] = [];
   switch (j.type) {
     case 'system':
-      out.push({ kind: 'system', sessionId, data: { subtype: j.subtype, model: j.model, cwd: j.cwd, tools: Array.isArray(j.tools) ? j.tools.length : undefined } });
+      out.push({ kind: 'system', sessionId, data: { subtype: j.subtype, model: j.model, cwd: j.cwd, tools: Array.isArray(j.tools) ? j.tools.length : undefined, ...(Array.isArray(j.mcp_servers) ? { mcpServers: j.mcp_servers.filter((m: any) => m && typeof m.name === 'string').map((m: any) => ({ name: m.name, status: String(m.status ?? '') })) } : {}) } });
       break;
     case 'assistant': {
       const msg = j.message ?? {};

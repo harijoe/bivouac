@@ -102,10 +102,23 @@ export interface Task {
   error: string | null;
   /** Name of the Claude account used by the last agent session. */
   accountName: string | null;
+  /** MCP servers and skills the agent had in its last session; null before the first one. */
+  tooling: Tooling | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
 }
+
+export interface ToolingMcp {
+  name: string;
+  kind: 'builtin' | 'project';
+  transport: 'stdio' | 'http';
+  /** `configured` = passed to the agent; `skipped` = declared but not given (see `note`); `connected` / `failed` come from the CLI. */
+  status: 'configured' | 'connected' | 'failed' | 'skipped';
+  note?: string;
+}
+export interface ToolingSkill { name: string; source: 'image' | 'catalogue' | 'repository'; note?: string }
+export interface Tooling { mcp: ToolingMcp[]; skills: ToolingSkill[] }
 
 export type EventKind =
   | 'status' | 'assistant_text' | 'tool_use' | 'tool_result' | 'result' | 'system'

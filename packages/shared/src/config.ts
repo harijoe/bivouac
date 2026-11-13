@@ -27,7 +27,32 @@ export interface ProjectConfig {
   /** How bivouac watches and photographs the preview. */
   preview?: { health?: { port?: number; path?: string }; screenshots?: string[] };
   budget?: { max_iterations?: number; max_cost_usd?: number; max_tokens?: number };
+  /** MCP servers given to the agent: `playwright` and `context7` are on by default, any other key is a server of the project. */
+  mcp?: McpConfig;
+  /** Names of catalogue skills (see SKILL_CATALOGUE) installed for the task. */
+  skills?: string[];
 }
+
+export interface McpServerConfig {
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  /** Names of project secrets (entered in the dashboard) this server needs; `${NAME}` in values refers to them. */
+  secrets?: string[];
+}
+export interface McpConfig {
+  playwright?: boolean;
+  context7?: boolean;
+  servers?: Record<string, McpServerConfig>;
+}
+
+export interface SkillEntry { repo: string; commit: string; path: string; dir: string; license: string }
+export const SKILL_CATALOGUE: Record<string, SkillEntry> = {
+  'taste-skill': { repo: 'https://github.com/Leonxlnx/taste-skill', commit: 'f6b76575f949707b4e3c37cd86cb44b0b98643e8', path: 'skills/taste-skill', dir: 'design-taste-frontend', license: 'MIT' },
+};
+export const MAX_SKILLS = 6;
 
 export const MAX_PORTS = 6;
 export const MAX_SCREENSHOT_PAGES = 6;
@@ -142,6 +167,79 @@ export function parsePreview(pv: unknown): NonNullable<ProjectConfig['preview']>
   return out;
 }
 
+export const MAX_MCP_SERVERS = 6;
+export const MCP_SECRET_RE = /^[A-Z][A-Z0-9_]{0,62}$/;
+const MCP_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,30}$/;
+export const MCP_BUILTINS = ['playwright', 'context7'];
+const REF_RE = /\$\{([^}]*)\}/g;
+function strMap(what: string, v: unknown, secrets: string[]): Record<string, string> {
+  if (typeof v !== 'object' || !v || Array.isArray(v)) throw new Error(`${what} must be a mapping of strings`);
+  const out: Record<string, string> = {};
+  for (const [k, x] of Object.entries(v)) {
+    if (typeof x !== 'string' && typeof x !== 'number' && typeof x !== 'boolean') throw new Error(`${what}.${k} must be a string`);
+    out[k] = checkRefs(`${what}.${k}`, String(x), secrets);
+  }
+  return out;
+}
+function checkRefs(what: string, v: string, secrets: string[]): string {
+  if (v.length > 2000) throw new Error(`${what} is too long`);
+  for (const m of v.matchAll(REF_RE)) if (!secrets.includes(m[1])) throw new Error(`${what}: \${${m[1]}} is not one of the secrets listed in \`secrets\` for this server (only declared secrets can be referenced)`);
+  return v;
+}
+/** `mcp:` section. Booleans switch the built-in servers off or on; any other key defines a server (stdio `command` or HTTP `url`). */
+export function parseMcp(raw: unknown): McpConfig {
+  if (typeof raw !== 'object' || !raw || Array.isArray(raw)) throw new Error('mcp must be a mapping, for example { playwright: false, docs: { url: "https://example.com/mcp" } }');
+  const out: McpConfig = {};
+  for (const [name, v] of Object.entries(raw)) {
+    if (MCP_BUILTINS.includes(name)) {
+      if (typeof v !== 'boolean') throw new Error(`mcp.${name} must be true or false`);
+      (out as any)[name] = v;
+      continue;
+    }
+    if (!MCP_NAME_RE.test(name)) throw new Error(`mcp: invalid server name "${name}" (lowercase letters, digits, dashes, underscores)`);
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(`mcp.${name} must be a mapping with a \`command\` or a \`url\``);
+    const r = v as Record<string, any>;
+    for (const k of Object.keys(r)) if (!['command', 'args', 'url', 'env', 'headers', 'secrets'].includes(k)) throw new Error(`mcp.${name}: unknown key "${k}"`);
+    const srv: McpServerConfig = {};
+    if (r.secrets !== undefined) {
+      if (!Array.isArray(r.secrets) || r.secrets.length > 8 || r.secrets.some((x: unknown) => typeof x !== 'string' || !MCP_SECRET_RE.test(x))) throw new Error(`mcp.${name}.secrets must be a list of at most 8 names such as LINEAR_API_KEY (capital letters, digits, underscores)`);
+      srv.secrets = [...new Set(r.secrets as string[])];
+    }
+    const secrets = srv.secrets ?? [];
+    if ((r.command === undefined) === (r.url === undefined)) throw new Error(`mcp.${name} needs exactly one of \`command\` (stdio server) or \`url\` (HTTP server)`);
+    if (r.command !== undefined) {
+      if (typeof r.command !== 'string' || !r.command.trim() || r.command.length > 300) throw new Error(`mcp.${name}.command must be a command name or path`);
+      srv.command = checkRefs(`mcp.${name}.command`, r.command, secrets);
+      if (r.args !== undefined) {
+        if (!Array.isArray(r.args) || r.args.length > 30 || r.args.some((a: unknown) => typeof a !== 'string' && typeof a !== 'number')) throw new Error(`mcp.${name}.args must be a list of at most 30 strings`);
+        srv.args = (r.args as (string | number)[]).map((a) => checkRefs(`mcp.${name}.args`, String(a), secrets));
+      }
+      if (r.env !== undefined) {
+        srv.env = strMap(`mcp.${name}.env`, r.env, secrets);
+        for (const k of Object.keys(srv.env)) if (!ENV_KEY_RE.test(k)) throw new Error(`mcp.${name}.env: invalid variable name "${k}"`);
+      }
+      if (r.headers !== undefined) throw new Error(`mcp.${name}.headers only applies to a \`url\` server`);
+    } else {
+      let u: URL;
+      try { u = new URL(String(r.url)); } catch { throw new Error(`mcp.${name}.url must be an http(s) URL`); }
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error(`mcp.${name}.url must be an http(s) URL`);
+      srv.url = checkRefs(`mcp.${name}.url`, String(r.url), secrets);
+      if (r.headers !== undefined) srv.headers = strMap(`mcp.${name}.headers`, r.headers, secrets);
+      if (r.args !== undefined || r.env !== undefined) throw new Error(`mcp.${name}: \`args\` and \`env\` only apply to a \`command\` server`);
+    }
+    (out.servers ??= {})[name] = srv;
+  }
+  if (Object.keys(out.servers ?? {}).length > MAX_MCP_SERVERS) throw new Error(`mcp: at most ${MAX_MCP_SERVERS} servers`);
+  return out;
+}
+
+export function parseSkills(raw: unknown): string[] {
+  if (!Array.isArray(raw) || raw.some((x) => typeof x !== 'string')) throw new Error('skills must be a list of names, for example [taste-skill]');
+  if (raw.length > MAX_SKILLS) throw new Error(`skills: at most ${MAX_SKILLS} skills`);
+  for (const n of raw) if (!SKILL_CATALOGUE[n]) throw new Error(`skills: "${n}" is not in the catalogue (available: ${Object.keys(SKILL_CATALOGUE).join(', ')}). Skills of the repository itself live in .claude/skills and need no entry here.`);
+  return [...new Set(raw as string[])];
+}
+
 /** Parse and validate a bivouac.yml document. Throws on invalid input. */
 export function parseProjectConfig(text: string): ProjectConfig {
   const raw = parse(text) ?? {};
@@ -186,6 +284,8 @@ export function parseProjectConfig(text: string): ProjectConfig {
   }
   if (raw.services !== undefined) cfg.services = parseServices(raw.services);
   if (raw.preview !== undefined) cfg.preview = parsePreview(raw.preview);
+  if (raw.mcp !== undefined) cfg.mcp = parseMcp(raw.mcp);
+  if (raw.skills !== undefined) cfg.skills = parseSkills(raw.skills);
   if (raw.limits !== undefined) {
     cfg.limits = { cpus: num('limits.cpus', raw.limits.cpus), memory: raw.limits.memory === undefined ? undefined : String(raw.limits.memory) };
     if (cfg.limits.memory && !/^\d+(\.\d+)?[kmgKMG]?$/.test(cfg.limits.memory)) throw new Error('limits.memory must look like 512m or 4g');

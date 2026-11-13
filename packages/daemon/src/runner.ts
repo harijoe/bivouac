@@ -9,6 +9,8 @@ import type { Sandbox } from './sandbox.js';
 import type { Project } from '@bivouac/shared';
 import { claudeEnv, resolveClaude } from './accounts.js';
 import { ServiceWatch } from './service-watch.js';
+import { redactValues as redactText } from './agent-tools.js';
+import { prepareTooling, redactData, type PreparedTooling } from './tooling.js';
 import { Shots } from './shots.js';
 import { fingerprint as envFingerprint, LOCK_FILES, removeArchive, SNAPSHOT_KEEP, SNAPSHOT_MAX_BYTES } from './snapshot.js';
 import { describeRuntime, detectRuntime, miseConfig, RUNTIME_FILES, runtimeKey, type RuntimeSpec } from './runtime.js';
@@ -248,6 +250,8 @@ export class TaskManager {
     let runtime = await this.prepareRuntime(id, sb, eff, a);
     if (a.stop) return this.finishStopped(id);
     let servicesKey = JSON.stringify(eff.services ?? {});
+    let skillsKey = '';
+    let toolingKey = '';
     if (a.stop) return this.finishStopped(id);
 
     // 3. setup (once per workspace) and dev server
@@ -288,8 +292,19 @@ export class TaskManager {
       eff = await this.loadConfig(task, project, sb, true);
       runtime = await this.prepareRuntime(id, sb, eff, a);
       if (a.stop) return this.finishStopped(id);
-      if (JSON.stringify(eff.services ?? {}) !== servicesKey) { servicesKey = JSON.stringify(eff.services ?? {}); await startSandbox(); await watch.baseline(); }
+      if (JSON.stringify(eff.services ?? {}) !== servicesKey) { servicesKey = JSON.stringify(eff.services ?? {}); skillsKey = ''; await startSandbox(); await watch.baseline(); }
       await writeDev();
+      const wantedSkills = JSON.stringify(eff.skills ?? []);
+      const tools = await prepareTooling({ store: this.store, project, sb, eff, installSkills: skillsKey !== wantedSkills });
+      skillsKey = wantedSkills;
+      this.store.setTooling(id, tools.tooling);
+      const newToolingKey = JSON.stringify(tools.tooling);
+      if (newToolingKey !== toolingKey) {
+        toolingKey = newToolingKey;
+        this.store.addEvent(id, 'system', { subtype: 'tooling', mcp: tools.tooling.mcp.map((m) => `${m.name}${m.status === 'skipped' ? ' (skipped)' : ''}`), skills: tools.tooling.skills.map((x) => x.name), message: `The agent has ${tools.tooling.mcp.filter((m) => m.status !== 'skipped').length} MCP server(s) and ${tools.tooling.skills.length} skill(s).` });
+        for (const n of tools.notes) { this.store.addNotice(id, n); this.store.addEvent(id, 'system', { subtype: 'tooling_warning', message: n }); }
+      }
+
       const env = describeEnvironment({ aliasUrl: this.store.getTask(id)!.aliasUrl, ports: this.store.getTask(id)!.ports, services: Object.entries(eff.services ?? {}).map(([name, v]) => ({ name, image: v.image })), configError: this.store.getTask(id)!.configError });
       const instructions = this.store.takeInstructions(id);
       let prompt: string;
@@ -305,7 +320,7 @@ export class TaskManager {
       const notices = [...watch.takeNotices(), ...this.store.takeNotices(id)];
       if (notices.length) prompt += '\n\nNotes from bivouac about this task (services, preview):\n' + notices.map((n) => `- ${n}`).join('\n');
       this.store.setStatus(id, 'running');
-      const run = await this.runClaude(id, a, sb, prompt, task, remaining, iteration);
+      const run = await this.runClaude(id, a, sb, prompt, task, remaining, iteration, tools);
       await watch.check();
       if (a.stop) return this.finishStopped(id);
       if (run.outcome === 'budget') return void this.store.setStatus(id, 'budget_exceeded');
@@ -469,7 +484,20 @@ export class TaskManager {
 
   private finishStopped(id: number) { this.store.setStatus(id, 'stopped'); }
 
-  private async runClaude(id: number, a: Active, sb: Sandbox, prompt: string, task: Task, remaining: number, iteration: number):
+  /** The CLI says which servers it could start: the page shows that rather than what was only configured. */
+  private noteMcpStatus(id: number, servers: { name: string; status: string }[]) {
+    const cur = this.store.getTask(id)?.tooling;
+    if (!cur) return;
+    const mcp = cur.mcp.map((m) => {
+      const s = servers.find((x) => x.name === m.name);
+      if (!s || m.status === 'skipped') return m;
+      return { ...m, status: s.status === 'connected' ? ('connected' as const) : ('failed' as const), ...(s.status === 'connected' ? {} : { note: `the CLI reported: ${s.status}` }) };
+    });
+    this.store.setTooling(id, { ...cur, mcp });
+    for (const m of mcp) if (m.status === 'failed') this.store.addNotice(id, `MCP server "${m.name}" did not start (${m.note ?? 'failed'}); work without it.`);
+  }
+
+  private async runClaude(id: number, a: Active, sb: Sandbox, prompt: string, task: Task, remaining: number, iteration: number, tools: PreparedTooling):
     Promise<{ outcome: 'ok' | 'budget' | 'failed'; error?: string }> {
     const base = task.usage;
     const live = new Map<string, Omit<Usage, 'costUsd'>>();
@@ -480,7 +508,8 @@ export class TaskManager {
     const handle = (line: string) => {
       for (const ev of parseStreamLine(line)) {
         if (ev.sessionId && this.store.getTask(id)!.sessionId !== ev.sessionId) this.store.patchTask(id, { sessionId: ev.sessionId });
-        if (ev.kind !== 'rate_limit' || ev.data.status !== 'allowed') this.store.addEvent(id, ev.kind, ev.data, iteration);
+        if (ev.kind === 'system' && ev.data?.subtype === 'init' && Array.isArray(ev.data.mcpServers)) this.noteMcpStatus(id, ev.data.mcpServers);
+        if (ev.kind !== 'rate_limit' || ev.data.status !== 'allowed') this.store.addEvent(id, ev.kind, redactData(ev.data, tools.secretValues) as any, iteration);
         if (ev.messageUsage) {
           live.set(ev.messageUsage.messageId, ev.messageUsage.usage);
           const sum = [...live.values()].reduce((x, y) => ({ inputTokens: x.inputTokens + y.inputTokens, outputTokens: x.outputTokens + y.outputTokens, cacheReadTokens: x.cacheReadTokens + y.cacheReadTokens, cacheCreationTokens: x.cacheCreationTokens + y.cacheCreationTokens }), { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 });
@@ -495,9 +524,10 @@ export class TaskManager {
     if (account && task.accountName !== account.name) this.store.patchTask(id, { accountName: account.name });
     const accountNote = account ? ` (Claude account “${account.name}”)` : '';
     const args = [this.cfg.claudeBin, '-p', prompt, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', '--max-budget-usd', remaining.toFixed(4)];
+    args.push(...tools.args);
     if (task.sessionId) args.push('--resume', task.sessionId);
     const code = await sb.exec(args, {
-      cwd: path.join(sb.ws, 'repo'), env: claudeEnv(account), signal: a.abort.signal,
+      cwd: path.join(sb.ws, 'repo'), env: { ...claudeEnv(account), ...tools.env }, signal: a.abort.signal,
       onData: (chunk, stream) => { if (stream === 'stdout') split.push(chunk).forEach(handle); else stderr.push(chunk); },
     });
     split.flush().forEach(handle);
@@ -505,8 +535,8 @@ export class TaskManager {
     if (a.stop) return { outcome: 'ok' };
     if (tokenAbort) return { outcome: 'budget' };
     if (result?.subtype === 'error_max_budget_usd') return { outcome: 'budget' };
-    if (!result) return { outcome: 'failed', error: `claude${accountNote} exited with code ${code} without a result. ${truncateOutput(stderr.join(''), 1500)}` };
-    if (result.isError && result.subtype !== 'error_max_turns') return { outcome: 'failed', error: `claude${accountNote} reported an error (${result.subtype}): ${truncateOutput(result.text, 1500)}` };
+    if (!result) return { outcome: 'failed', error: redactText(`claude${accountNote} exited with code ${code} without a result. ${truncateOutput(stderr.join(''), 1500)}`, tools.secretValues) };
+    if (result.isError && result.subtype !== 'error_max_turns') return { outcome: 'failed', error: `claude${accountNote} reported an error (${result.subtype}): ${redactText(truncateOutput(result.text, 1500), tools.secretValues)}` };
     return { outcome: 'ok' };
   }
 }

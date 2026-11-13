@@ -136,6 +136,11 @@ export function createExecutorApp(cfg: DaemonConfig, docker: Dockerode, login: L
       }
     });
   }));
+  app.post('/sandboxes/:id/install-skills', wrap(async (c) => {
+    const b = await c.req.json();
+    if (!Array.isArray(b.names) || b.names.length > 20 || !b.names.every((x: unknown) => typeof x === 'string')) throw new Error('names must be a list of skill names');
+    return c.json({ results: await sb(c).installSkills(b.names) });
+  }));
   app.get('/sandboxes/:id/running', wrap(async (c) => c.json({ running: await sb(c).isRunning() })));
   app.post('/sandboxes/:id/stop', wrap(async (c) => { await sb(c).stop(); return c.json({ ok: true }); }));
   app.post('/sandboxes/:id/destroy', wrap(async (c) => { await sb(c).destroy(); return c.json({ ok: true }); }));

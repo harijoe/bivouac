@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { EventEmitter } from 'node:events';
-import { emptyUsage, TERMINAL_STATUSES, type PortDef, type ServiceConfig, type EventKind, type ClaudeAccount, type EnvSnapshot, type PreviewHealth, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Usage } from '@bivouac/shared';
+import { emptyUsage, TERMINAL_STATUSES, type PortDef, type ServiceConfig, type EventKind, type ClaudeAccount, type EnvSnapshot, type PreviewHealth, type Project, type ProjectConfig, type Task, type TaskEvent, type TaskStatus, type Tooling, type Usage } from '@bivouac/shared';
 import { decrypt, encrypt } from './crypto.js';
 import type { RouteTask } from './routes.js';
 
@@ -55,6 +55,13 @@ CREATE TABLE IF NOT EXISTS idempotency (
 CREATE TABLE IF NOT EXISTS claude_accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE, kind TEXT NOT NULL, secret_enc TEXT NOT NULL,
   connected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), is_default INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS project_secrets (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, name TEXT NOT NULL, value_enc TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), PRIMARY KEY(project_id, name));
+CREATE TABLE IF NOT EXISTS mcp_servers_seen (
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, name TEXT NOT NULL, fingerprint TEXT NOT NULL,
+  spec_json TEXT NOT NULL, approved INTEGER NOT NULL DEFAULT 0,
+  seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), PRIMARY KEY(project_id, name, fingerprint));
 CREATE TABLE IF NOT EXISTS env_snapshots (
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE, fingerprint TEXT NOT NULL,
   bytes INTEGER NOT NULL, uses INTEGER NOT NULL DEFAULT 0,
@@ -121,6 +128,7 @@ export class Store {
     if (!pc.includes('alias')) this.db.exec('ALTER TABLE projects ADD COLUMN alias TEXT');
     if (!pc.includes('alias_task_id')) this.db.exec('ALTER TABLE projects ADD COLUMN alias_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL');
     if (!pc.includes('alias_public_paths')) this.db.exec("ALTER TABLE projects ADD COLUMN alias_public_paths TEXT NOT NULL DEFAULT '[]'");
+    if (!cols('tasks').includes('tooling_json')) this.db.exec('ALTER TABLE tasks ADD COLUMN tooling_json TEXT');
     this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS projects_alias ON projects(alias) WHERE alias IS NOT NULL');
     this.migrateClaudeAccounts();
   }
@@ -239,6 +247,36 @@ export class Store {
     this.bus.emit('msg', { type: 'project', projectId: id } satisfies StoreMessage);
   }
 
+  // ---- project secrets (values of MCP servers: encrypted, never returned by the API; only the runner reads them)
+  listProjectSecrets(projectId: number): { name: string; updatedAt: string }[] {
+    return (this.db.prepare('SELECT name, updated_at FROM project_secrets WHERE project_id=? ORDER BY name').all(projectId) as any[]).map((r) => ({ name: r.name, updatedAt: r.updated_at }));
+  }
+  setProjectSecret(projectId: number, name: string, value: string) {
+    this.db.prepare("INSERT INTO project_secrets(project_id,name,value_enc) VALUES(?,?,?) ON CONFLICT(project_id,name) DO UPDATE SET value_enc=excluded.value_enc, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')").run(projectId, name, encrypt(this.key, value));
+  }
+  deleteProjectSecret(projectId: number, name: string) { this.db.prepare('DELETE FROM project_secrets WHERE project_id=? AND name=?').run(projectId, name); }
+  getProjectSecretValues(projectId: number): Record<string, string> {
+    return Object.fromEntries((this.db.prepare('SELECT name, value_enc FROM project_secrets WHERE project_id=?').all(projectId) as any[]).map((r) => [r.name, decrypt(this.key, r.value_enc)]));
+  }
+  /** A server of bivouac.yml that asks for secrets: remembered so an administrator can approve exactly this definition. */
+  noteMcpServer(projectId: number, name: string, fingerprint: string, spec: unknown) {
+    this.db.prepare("INSERT INTO mcp_servers_seen(project_id,name,fingerprint,spec_json) VALUES(?,?,?,?) ON CONFLICT(project_id,name,fingerprint) DO UPDATE SET seen_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')").run(projectId, name, fingerprint, JSON.stringify(spec));
+    this.db.prepare("DELETE FROM mcp_servers_seen WHERE project_id=? AND approved=0 AND seen_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')").run(projectId);
+  }
+  isMcpApproved(projectId: number, name: string, fingerprint: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM mcp_servers_seen WHERE project_id=? AND name=? AND fingerprint=? AND approved=1').get(projectId, name, fingerprint);
+  }
+  listMcpServers(projectId: number): { name: string; fingerprint: string; spec: any; approved: boolean; seenAt: string }[] {
+    return (this.db.prepare('SELECT * FROM mcp_servers_seen WHERE project_id=? ORDER BY approved, seen_at DESC LIMIT 50').all(projectId) as any[]).map((r) => ({ name: r.name, fingerprint: r.fingerprint, spec: JSON.parse(r.spec_json), approved: !!r.approved, seenAt: r.seen_at }));
+  }
+  setMcpApproval(projectId: number, name: string, fingerprint: string, approved: boolean): boolean {
+    return this.db.prepare('UPDATE mcp_servers_seen SET approved=? WHERE project_id=? AND name=? AND fingerprint=?').run(approved ? 1 : 0, projectId, name, fingerprint).changes > 0;
+  }
+  setTooling(id: number, tooling: Tooling) {
+    this.db.prepare('UPDATE tasks SET tooling_json=? WHERE id=?').run(JSON.stringify(tooling), id);
+    this.emitTask(id);
+  }
+
   // ---- alias: a stable host (`<alias>.<domain>`) a project points at one of its tasks (OAuth callbacks, webhooks)
   aliasTaken(alias: string, exceptProjectId?: number): boolean {
     return !!this.db.prepare('SELECT 1 FROM projects WHERE alias=? AND id<>?').get(alias, exceptProjectId ?? -1);
@@ -266,7 +304,7 @@ export class Store {
       id: r.id, projectId: r.project_id, projectName: r.project_name, name: r.name, title: r.title, prompt: r.prompt, successCommand: r.success_command,
       branch: r.branch, baseBranch: r.base_branch, status: r.status, iteration: r.iteration, maxIterations: r.max_iterations,
       maxCostUsd: r.max_cost_usd, maxTokens: r.max_tokens, sessionId: r.session_id, usage,
-      devPort: r.dev_port ?? null, ports, services: Object.entries(live.services).map(([name, v]) => ({ name, image: v.image })), preview: r.preview_json ? JSON.parse(r.preview_json) : null, aliasUrl: aliased ? this.aliasUrlFor(aliased) : null, configError: live.error, previewUrl: this.previewUrlFor(r.project_name, r.name), pushed: !!r.pushed, prUrl: r.pr_url, error: r.error, accountName: r.account_name ?? null,
+      devPort: r.dev_port ?? null, ports, services: Object.entries(live.services).map(([name, v]) => ({ name, image: v.image })), preview: r.preview_json ? JSON.parse(r.preview_json) : null, aliasUrl: aliased ? this.aliasUrlFor(aliased) : null, configError: live.error, previewUrl: this.previewUrlFor(r.project_name, r.name), pushed: !!r.pushed, prUrl: r.pr_url, error: r.error, accountName: r.account_name ?? null, tooling: r.tooling_json ? JSON.parse(r.tooling_json) : null,
       createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at,
     };
   }

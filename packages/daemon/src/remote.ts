@@ -1,4 +1,5 @@
 import type { ExecOpts, PrepareOpts, Sandbox, SandboxSpec, ServiceState } from './sandbox.js';
+import type { SkillResult } from './skills.js';
 import type { LoginSession } from './executor.js';
 import type { DiffPatch, DiffSummary, GitMark } from '@bivouac/shared';
 
@@ -55,6 +56,7 @@ export class RemoteSandbox implements Sandbox {
   async fingerprint() { return (await this.c.call('GET', this.p('fingerprint'))).hash as string; }
   async readFile(rel: string) { return (await this.c.call('GET', this.p('file', `&path=${encodeURIComponent(rel)}`))).content as string | null; }
   async writeFile(rel: string, content: string) { await this.c.call('PUT', this.p('file'), { path: rel, content }); }
+  async installSkills(names: string[]) { return (await this.c.call('POST', this.p('install-skills'), { names })).results as SkillResult[]; }
   async isRunning() { return (await this.c.call('GET', this.p('running'))).running as boolean; }
   async stop() { await this.c.call('POST', this.p('stop')); }
   async destroy() { await this.c.call('POST', this.p('destroy')); }

@@ -1,12 +1,13 @@
 import Dockerode from 'dockerode';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chownSync, closeSync, constants as fsc, copyFileSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
+import { chownSync, closeSync, cpSync, constants as fsc, copyFileSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
-import { DEFAULT_SERVICE_CPUS, DEFAULT_SERVICE_MEMORY, type DiffPatch, type DiffSummary, type GitMark, type ServiceConfig } from '@bivouac/shared';
+import { DEFAULT_SERVICE_CPUS, DEFAULT_SERVICE_MEMORY, SKILL_CATALOGUE, type SkillEntry, type DiffPatch, type DiffSummary, type GitMark, type ServiceConfig } from '@bivouac/shared';
 import { chownTree, git, gitOk } from './git.js';
+import { ensureSkill, type SkillResult } from './skills.js';
 import { diffPatch, diffSummary, markState } from './gitdiff.js';
 import { createArchive, extractArchive, removeArchive, snapshotFile, snapshotPaths } from './snapshot.js';
 
@@ -81,6 +82,8 @@ export interface Sandbox {
   diffPatch(from: string, to: string, paths: string[], offset: number, limit: number): Promise<DiffPatch>;
   /** A binary file below the workspace (at most 8 MB). Returns null when absent or too large. */
   readBinary(rel: string): Promise<Buffer | null>;
+  /** Puts catalogue skills (pinned, cached on the server) into the agent's `~/.claude/skills`; one failing skill never stops the others. */
+  installSkills(names: string[]): Promise<SkillResult[]>;
   /** Files below the workspace (`repo/…`, `.bivouac/…`). Returns null when absent. */
   readFile(rel: string): Promise<string | null>;
   writeFile(rel: string, content: string): Promise<void>;
@@ -99,6 +102,32 @@ abstract class HostWorkspace {
   protected abstract uid: number;
   /** Where this project's snapshot archives live (shared by all its tasks). */
   protected abstract snapDir: string;
+  protected abstract skillCache: string;
+  protected catalogue: Record<string, SkillEntry> = SKILL_CATALOGUE;
+  protected abstract placeSkills(dirs: string[]): Promise<void>;
+  async installSkills(names: string[]): Promise<SkillResult[]> {
+    const results: SkillResult[] = [];
+    const staged: string[] = [];
+    const stage = this.safe('.bivouac/skills');
+    rmSync(stage, { recursive: true, force: true });
+    for (const name of names) {
+      const entry = this.catalogue[name];
+      if (!entry) { results.push({ name, ok: false, error: 'not in the catalogue' }); continue; }
+      try {
+        const r = await ensureSkill(this.skillCache, name, entry);
+        mkdirSync(stage, { recursive: true });
+        cpSync(r.dir, path.join(stage, entry.dir), { recursive: true });
+        staged.push(entry.dir);
+        results.push({ name, ok: true, hooksRemoved: r.hooksRemoved });
+      } catch (e: any) { results.push({ name, ok: false, error: String(e?.message ?? e).slice(0, 300) }); }
+    }
+    if (staged.length) {
+      chownTree(stage, this.uid);
+      try { await this.placeSkills(staged); } catch (e: any) { for (const r of results) if (r.ok) Object.assign(r, { ok: false, error: `could not install: ${String(e?.message ?? e).slice(0, 200)}` }); }
+    }
+    rmSync(stage, { recursive: true, force: true });
+    return results;
+  }
   async snapshotCreate(fp: string, maxBytes?: number) {
     const repo = this.safe('repo');
     const ls = await git(['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], { cwd: repo, uid: this.uid, untrusted: true });
@@ -264,6 +293,7 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
   protected hostWs: string;
   protected uid: number;
   protected snapDir: string;
+  protected skillCache: string;
   private taskDir: string;
   private container: Dockerode.Container | null = null;
   private name = '';
@@ -274,7 +304,14 @@ export class DockerSandbox extends HostWorkspace implements Sandbox {
     this.taskDir = path.join(opts.dataDir, 'projects', opts.project, 'tasks', `t-${opts.taskId}`);
     this.hostWs = path.join(this.taskDir, 'workspace');
     this.snapDir = path.join(opts.dataDir, 'projects', opts.project, 'snapshots');
+    this.skillCache = path.join(opts.dataDir, 'skills');
     this.uid = opts.uid;
+  }
+  protected async placeSkills(dirs: string[]) {
+    const script = 'mkdir -p "$HOME/.claude/skills" && for d in "$@"; do rm -rf "$HOME/.claude/skills/$d" && cp -r "/workspace/.bivouac/skills/$d" "$HOME/.claude/skills/$d"; done';
+    let err = '';
+    const code = await this.exec(['sh', '-c', script, 'sh', ...dirs], { onData: (c, s) => { if (s === 'stderr') err += c; } });
+    if (code !== 0) throw new Error(err.trim() || `exit code ${code}`);
   }
   get networkName() { return this.name; }
   async imageId() { return (await this.docker.getImage(this.opts.image).inspect().catch(() => null))?.Id ?? this.opts.image; }
@@ -500,11 +537,19 @@ export class LocalSandbox extends HostWorkspace implements Sandbox {
   protected hostWs: string;
   protected uid = 1000;
   protected snapDir: string;
+  protected skillCache: string;
   private sup: ChildProcess | null = null;
-  constructor(dir: string, private supervisorPath?: string, snapDir?: string) {
+  /** Where the agent's `~/.claude/skills` would be (tests read it). */
+  get skillsHome() { return path.join(this.hostWs, '.claude-home', '.claude', 'skills'); }
+  protected async placeSkills(dirs: string[]) {
+    for (const d of dirs) { rmSync(path.join(this.skillsHome, d), { recursive: true, force: true }); cpSync(path.join(this.hostWs, '.bivouac', 'skills', d), path.join(this.skillsHome, d), { recursive: true }); }
+  }
+  setCatalogue(c: Record<string, SkillEntry>) { this.catalogue = c; }
+  constructor(dir: string, private supervisorPath?: string, snapDir?: string, skillCache?: string) {
     super(); this.ws = dir; this.hostWs = dir; mkdirSync(dir, { recursive: true });
     // <data>/projects/<project>/tasks/t-N/workspace -> <data>/projects/<project>/snapshots
     this.snapDir = snapDir ?? path.resolve(dir, '..', '..', '..', 'snapshots');
+    this.skillCache = skillCache ?? path.resolve(dir, '..', '..', '..', '..', 'skills');
   }
   async imageId() { return 'local'; }
   async start() {
