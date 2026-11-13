@@ -1,5 +1,12 @@
 # PROGRESS
 
+## Journal v0.6 (2026-11-13)
+Mission : donner à l'agent de tâche un navigateur (Playwright MCP), la doc à jour (Context7), des skills, des serveurs MCP par projet.
+- Fait : Playwright MCP et Context7 MCP dans l'image (versions épinglées), `mcp:` et `skills:` dans `bivouac.yml`, secrets MCP chiffrés et approbation par l'administrateur, skills `frontend-design` / `webapp-testing` dans l'image, catalogue (`taste-skill`, hook Stop retiré), prompt, section « Agent tools » du dashboard et `tooling` dans `get_task`, `docs/agent-tools.md`, licences et décisions dans `docs/decisions.md`. Page « restarting » Traefik et page de mise à jour qui attend la nouvelle version.
+- Image : +84 Mo sur disque, +12 Mo compressés (voir CHANGELOG).
+- **E2E sur VM Hetzner neuve** (`scripts/e2e-fresh-vps.sh --real --staging`, vrai CLI claude) : **PASSÉ**. `get_task` liste playwright:connected et context7:connected, skills frontend-design et webapp-testing ; l'agent a appelé le Playwright MCP 8 fois (navigate, resize, console, click, screenshot) et chargé le skill `frontend-design`. VM et clé SSH supprimées ; `bivouac-manual` intacte.
+- Le tag `v0.6.0` (df3172d, CI en échec : tests corrigés depuis) est déplacé sur le dernier commit avant publication ; aucune release publiée.
+
 ## Journal v0.5.1 (2026-11-13)
 Release des correctifs de la revue v0.5, sans nouveau code.
 - `## Unreleased` → `## 0.5.1` (phrase d'introduction), `DEFAULT_VERSION` et les quatre `package.json` à 0.5.1 (commit c50ac2f), tag `v0.5.1`.
