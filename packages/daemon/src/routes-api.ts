@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { parseProjectConfig, type Task } from '@bivouac/shared';
+import { MCP_SECRET_RE, parseProjectConfig, type Task } from '@bivouac/shared';
 import type { AppEnv, C, Ctx } from './context.js';
 import { baseUrl } from './config.js';
 import { TaskLogs } from './logs.js';
@@ -71,6 +71,46 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
   app.get('/api/projects/:id/snapshots', run((c) => c.json(svc.listSnapshots(Number(param(c, 'id'))))));
   app.post('/api/projects/:id/snapshots/rebuild', run(async (c) => { admin(c); return c.json(await svc.rebuildSnapshots(Number(param(c, 'id')), actorOf(c))); }));
   app.delete('/api/projects/:id/snapshots/:sid', run(async (c) => { admin(c); await svc.deleteSnapshot(Number(param(c, 'id')), Number(param(c, 'sid')), actorOf(c)); return c.json({ ok: true }); }));
+  // ---- MCP of a project: secret values are write-only (listing returns names and dates), a server that asks for secrets needs an approval
+  const projectOf = (c: any) => {
+    const p = store.getProject(Number(param(c, 'id')));
+    if (!p) throw new UserError('This project does not exist.', 'unknown_project', 404);
+    return p;
+  };
+  app.get('/api/projects/:id/mcp', run((c) => {
+    admin(c);
+    const p = projectOf(c);
+    return c.json({ secrets: store.listProjectSecrets(p.id), servers: store.listMcpServers(p.id) });
+  }));
+  app.put('/api/projects/:id/mcp/secrets/:name', run(async (c) => {
+    admin(c);
+    const p = projectOf(c);
+    const name = param(c, 'name');
+    if (!MCP_SECRET_RE.test(name)) throw new UserError('A secret name uses capital letters, digits and underscores, for example LINEAR_API_KEY.');
+    const b = await c.req.json().catch(() => ({}));
+    const value = typeof b.value === 'string' ? b.value.trim() : '';
+    if (!value || value.length > 4000 || /[\r\n\0]/.test(value)) throw new UserError('Enter the secret value on a single line (at most 4000 characters).');
+    store.setProjectSecret(p.id, name, value);
+    auth.audit(actorOf(c).label, 'mcp_secret_set', { project: p.name, name });
+    return c.json({ ok: true });
+  }));
+  app.delete('/api/projects/:id/mcp/secrets/:name', run((c) => {
+    admin(c);
+    const p = projectOf(c);
+    store.deleteProjectSecret(p.id, param(c, 'name'));
+    auth.audit(actorOf(c).label, 'mcp_secret_deleted', { project: p.name, name: param(c, 'name') });
+    return c.json({ ok: true });
+  }));
+  app.post('/api/projects/:id/mcp/servers/:fingerprint/:action', run((c) => {
+    admin(c);
+    const p = projectOf(c);
+    const action = param(c, 'action');
+    if (action !== 'approve' && action !== 'revoke') throw new UserError('Unknown action.', 'bad_request', 404);
+    const srv = store.listMcpServers(p.id).find((x) => x.fingerprint === param(c, 'fingerprint'));
+    if (!srv || !store.setMcpApproval(p.id, srv.name, srv.fingerprint, action === 'approve')) throw new UserError('This server definition is not known (anymore): start a task so bivouac reads it again.', 'unknown_server', 404);
+    auth.audit(actorOf(c).label, action === 'approve' ? 'mcp_server_approved' : 'mcp_server_revoked', { project: p.name, name: srv.name });
+    return c.json({ ok: true });
+  }));
   app.post('/api/projects', run(async (c) => {
     admin(c);
     const b = await c.req.json().catch(() => ({}));
@@ -198,12 +238,28 @@ export function apiRoutes(app: Hono<AppEnv>, ctx: Ctx) {
     return c.json({
       admin: isAdmin, baseUrl: baseUrl(cfg), domain: cfg.domain, sslip: cfg.domain.endsWith('.sslip.io'), publicIp: ctx.publicIp, mcpUrl: `${baseUrl(cfg)}/mcp`, version: cfg.version,
       claude: svc.claudeStatus(),
+      context7: { configured: !!store.getSecretSetting('context7_api_key') },
       github: { configured: ctx.gh.configured, slug: ctx.gh.creds?.slug ?? null, installUrl: ctx.gh.installUrl(), appUrl: ctx.gh.creds?.htmlUrl ?? null },
       budgets: { maxIterations: Number(store.getSetting('default_max_iterations') ?? 0) || null, maxCostUsd: Number(store.getSetting('default_max_cost_usd') ?? 0) || null },
       users: isAdmin ? auth.listUsers() : [], allowlist: isAdmin ? auth.listAllowed() : [],
       redirectAllow: isAdmin ? cfg.oauthRedirectAllow : [],
       grants: oauth.listGrants().map((g) => ({ ...g, createdAt: new Date(g.createdAt * 1000).toISOString(), lastUsedAt: g.lastUsedAt ? new Date(g.lastUsedAt * 1000).toISOString() : null })),
     });
+  }));
+  app.put('/api/settings/context7', run(async (c) => {
+    admin(c);
+    const b = await c.req.json().catch(() => ({}));
+    const key = typeof b.apiKey === 'string' ? b.apiKey.trim() : '';
+    if (!key || key.length > 500 || /\s/.test(key)) throw new UserError('Enter the Context7 API key (no spaces).');
+    store.setSecretSetting('context7_api_key', key);
+    auth.audit(actorOf(c).label, 'context7_key_set');
+    return c.json({ ok: true });
+  }));
+  app.delete('/api/settings/context7', run((c) => {
+    admin(c);
+    store.setSecretSetting('context7_api_key', null);
+    auth.audit(actorOf(c).label, 'context7_key_removed');
+    return c.json({ ok: true });
   }));
   app.put('/api/settings/budgets', run(async (c) => {
     admin(c);

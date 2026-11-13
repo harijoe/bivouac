@@ -1,5 +1,5 @@
 import type { AttemptDiff, AttemptShots, DiffPatch } from '@bivouac/shared';
-import { mergeConfig, parseProjectConfig, slugify, titleFromPrompt, validateTaskName, type Project, type Task } from '@bivouac/shared';
+import { mergeConfig, parseProjectConfig, slugify, titleFromPrompt, validateTaskName, type Project, type Task, type Tooling } from '@bivouac/shared';
 import type { DaemonConfig } from './config.js';
 import { baseUrl } from './config.js';
 import type { Auth } from './auth.js';
@@ -48,6 +48,8 @@ export interface TaskSummary {
   urls: { name: string; port: number; main: boolean; url: string }[];
   services: { name: string; image: string }[];
   configError: string | null;
+  /** The MCP servers and skills the agent had in its last session. */
+  tooling: Tooling | null;
   /** Health of the dev server (unhealthy / down: the preview is unavailable, `lastCause` says why). */
   preview: { state: string; since: string; restarts: number; lastCause: string | null } | null;
   /** Stable URL when the project alias points at this task. */
@@ -223,7 +225,7 @@ export class Service {
       id: t.id, name: t.name, project: t.projectName, title: t.title, status: t.status, iteration: t.iteration, maxIterations: t.maxIterations,
       costUsd: t.usage.costUsd, costKind: this.costKind(t.projectId), maxCostUsd: t.maxCostUsd, maxTokens: t.maxTokens, successCommand: t.successCommand, tokens: t.usage.inputTokens + t.usage.outputTokens + t.usage.cacheCreationTokens,
       previewUrl: t.previewUrl, dashboardUrl: this.taskUrl(t), prUrl: t.prUrl, pushed: t.pushed, branch: t.branch, error: t.error, createdAt: t.createdAt, finishedAt: t.finishedAt,
-      urls: t.ports.map((p) => ({ name: p.name, port: p.port, main: p.primary, url: p.url })), services: t.services, configError: t.configError,
+      urls: t.ports.map((p) => ({ name: p.name, port: p.port, main: p.primary, url: p.url })), services: t.services, configError: t.configError, tooling: t.tooling,
       preview: t.preview ? { state: t.preview.state, since: t.preview.since, restarts: t.preview.restarts, lastCause: t.preview.cause } : null, aliasUrl: t.aliasUrl,
     };
   }

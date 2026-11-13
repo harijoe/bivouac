@@ -1,4 +1,4 @@
-import { truncateOutput } from '@bivouac/shared';
+import { truncateOutput, type Tooling } from '@bivouac/shared';
 
 export interface PromptContext {
   prompt: string;
@@ -17,6 +17,22 @@ export interface PromptContext {
   services?: { name: string; image: string; env?: Record<string, string> }[];
   /** Tool versions installed for the task, as `node 26, pnpm 11`. */
   runtime?: string;
+  tooling?: Tooling | null;
+}
+
+/** The MCP servers and skills of this session, and the rule that UI work is checked in a browser before it counts as done. */
+export function describeToolbox(t: Tooling | null | undefined, previewUrl?: string | null): string[] {
+  if (!t) return [];
+  const out: string[] = [];
+  const mcp = t.mcp.filter((m) => m.status !== 'skipped');
+  const has = (n: string) => mcp.some((m) => m.name === n);
+  if (mcp.length) out.push(`- MCP servers available in this session: ${mcp.map((m) => m.name).join(', ')}. Their tools are named \`mcp__<server>__<tool>\`.`);
+  if (has('playwright')) out.push(`- The \`playwright\` MCP server drives a headless Chromium inside your container, so the app and its dev server are reachable at http://localhost:<port> for every port you declared${previewUrl ? ` (the public preview URL ${previewUrl} also works)` : ''}. Use it to open pages, take snapshots and screenshots, click, type, read the console and the network.`);
+  if (has('context7')) out.push('- The `context7` MCP server gives current documentation for libraries and frameworks (resolve the library id, then fetch its docs). Prefer it to memory when you use an API you are not sure of.');
+  if (t.skills.length) out.push(`- Skills available (the Skill tool loads them when relevant): ${t.skills.map((s) => s.name).join(', ')}.`);
+  if (t.skills.some((x) => x.source === 'catalogue')) out.push('- Skills from the catalogue run no hook of their own in bivouac: a "gate" or "finish check" they describe is advice you apply yourself (run it only if it ends within a few minutes). Only the success command decides whether the task succeeded.');
+  if (has('playwright')) out.push('- Every change that touches the user interface must be checked on the running preview with the browser before you consider the work finished: open the affected pages at 375 px wide and at 1280 px wide (resize the browser window), look at the result, and read the console for errors. Fix what you find. A change you did not look at is not finished.');
+  return out;
 }
 
 /** What the agent needs to know about ports and sidecars, and how to change them. Shown at every session start. */
@@ -62,6 +78,7 @@ export function buildInitialPrompt(c: PromptContext): string {
     '- bivouac watches the dev server: if it dies or stops answering it is restarted with a growing delay (and you are told in your next session). Its state is in `/workspace/.bivouac/health.json`. To restart it yourself: `touch /workspace/.bivouac/restart.req`. A health path other than `/` can be set with `preview: { health: { path: /health } }` in `bivouac.yml`.',
     '- After each attempt bivouac opens the pages listed under `preview: { screenshots: ["/", "/login"] }` in `bivouac.yml` (default `/`) at 375 px and 1280 px wide, and records errors from the browser console, so keep those pages free of errors.',
     ...describeTooling(c.runtime),
+    ...describeToolbox(c.tooling, c.previewUrl),
   ].join('\n');
 }
 
