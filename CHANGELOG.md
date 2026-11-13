@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.5.1
 
-Fixes from a full review of 0.5.0 (details in `docs/review-v0.5.md`).
+Fixes from a full review of 0.5.0: two security issues in what an agent can make the host do, a more reliable update and restart path, and many smaller fixes (details in `docs/review-v0.5.md`).
 
 ### Security
 - The agent can no longer make bivouac run commands through the repository's `.git/config` (`core.fsmonitor`, clean filters, `textconv`, partial-clone commands) or send the push token to another server (`remote.origin.url`, `pushurl`, `insteadOf`): host-side git now works from a reduced configuration, a clean environment and the project's own URL.
