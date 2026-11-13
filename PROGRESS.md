@@ -1,9 +1,17 @@
 # PROGRESS
 
+## Journal v0.6 slim (2026-11-13)
+Allègement de l'image de tâche avant la publication de 0.6.0 (commit 7a1205f, le tag `v0.6.0` y a été déplacé).
+- **Mesure** (`docker image inspect`, `docker images`) : 0.5.1 = 2272 Mo disque / 628 Mo compressés ; premier 0.6.0 = 2368 Mo / 640 Mo (+96 Mo / +12 Mo, dont `/opt/bivouac` 14 → 95 Mo) ; 0.6.0 allégée = **2299 Mo / 631 Mo (+27 Mo / +3 Mo** contre 0.5.1), `/opt/bivouac` 37 Mo. CHANGELOG corrigé (le « +84 Mo » du brief était une autre unité de mesure).
+- **Un seul playwright-core** : `/opt/bivouac/node_modules/playwright-core` est un lien vers celui de `@playwright/mcp` (1.66 alpha) ; `shot.mjs` est inchangé et produit ses captures (375 et 1280 px, statut, titre) avec ce pilote, testé dans l'image.
+- **Retiré après l'installation** (même couche, `rm`/`find`, ni bundler ni fork) : `@types`, tout `@opentelemetry` sauf `api`, `*.map`, `*.d.ts`, README/CHANGELOG ; licences conservées. Constat : Context7 **ne démarre pas** sans `@opentelemetry/api` (import statique dans `mcp-telemetry.js`), donc `api` (3 Mo) reste ; ses exporteurs ne se chargent que pour l'endpoint Prometheus embarqué (jamais en stdio). Les dossiers `test` n'ont pas été supprimés (`playwright/lib/test` est du code d'exécution).
+- **Vérifié** : appel réel de chaque serveur dans l'image allégée (Context7 `resolve-library-id` → React ; Playwright MCP `browser_navigate` sur une page locale, 25 outils) ; e2e `scripts/e2e-fresh-vps.sh --real --staging` sur VM Hetzner neuve : **PASSÉ** (playwright:connected, context7:connected, l'agent a appelé le Playwright MCP 8 fois, captures Chromium via `get_attempt_screenshots`). L'appel réel de Context7 n'est pas fait par l'agent dans l'e2e (statut `connected` seulement) ; il a été fait à la main dans l'image. VM et clé supprimées, `bivouac-manual` intacte.
+- **Release** : CI verte sur `main` (7a1205f) et sur le tag `v0.6.0` ; images GHCR `0.6.0` (daemon et task) tirées en anonyme (DOCKER_CONFIG vide) : l'image de tâche fait 2299 Mo, `/opt/bivouac` 37 Mo ; notes du brouillon (id 444295480) remplacées par la section 0.6.0 du CHANGELOG. **Brouillon non publié** : tu le publies.
+
 ## Journal v0.6 (2026-11-13)
 Mission : donner à l'agent de tâche un navigateur (Playwright MCP), la doc à jour (Context7), des skills, des serveurs MCP par projet.
 - Fait : Playwright MCP et Context7 MCP dans l'image (versions épinglées), `mcp:` et `skills:` dans `bivouac.yml`, secrets MCP chiffrés et approbation par l'administrateur, skills `frontend-design` / `webapp-testing` dans l'image, catalogue (`taste-skill`, hook Stop retiré), prompt, section « Agent tools » du dashboard et `tooling` dans `get_task`, `docs/agent-tools.md`, licences et décisions dans `docs/decisions.md`. Page « restarting » Traefik et page de mise à jour qui attend la nouvelle version.
-- Image : +84 Mo sur disque, +12 Mo compressés (voir CHANGELOG).
+- Image : voir le journal « v0.6 slim » ci-dessous (chiffres corrigés).
 - **E2E sur VM Hetzner neuve** (`scripts/e2e-fresh-vps.sh --real --staging`, vrai CLI claude) : **PASSÉ**. `get_task` liste playwright:connected et context7:connected, skills frontend-design et webapp-testing ; l'agent a appelé le Playwright MCP 8 fois (navigate, resize, console, click, screenshot) et chargé le skill `frontend-design`. VM et clé SSH supprimées ; `bivouac-manual` intacte.
 - Le tag `v0.6.0` (df3172d, CI en échec : tests corrigés depuis) est déplacé sur le dernier commit avant publication ; aucune release publiée.
 - **Release** : tag `v0.6.0` sur 588c483, CI verte sur `main` et sur le tag (test, integration, images) ; images `ghcr.io/harijoe/bivouac-{daemon,task}` `0.6.0` tirées en anonyme (DOCKER_CONFIG vide) ; release GitHub **en brouillon** (id 444295480, notes de la section 0.6.0) : tu la publies, puis tu testes la mise à jour 0.5.1 → 0.6.0 depuis le dashboard (c'est aussi le test réel de la page « Restarting… »).
@@ -175,3 +183,5 @@ MISSION_REVIEW_V05_TERMINEE
 MISSION_V051_TERMINEE
 
 MISSION_V06_TERMINEE
+
+MISSION_V06_SLIM_TERMINEE
