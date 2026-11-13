@@ -45,3 +45,13 @@ export function pathsError(paths: string[]): string {
   }
   return '';
 }
+
+export const SECRET_NAME_RE = /^[A-Z][A-Z0-9_]{0,62}$/;
+
+/** Error message for a secret name, or '' when valid or still empty. */
+export function secretNameError(v: string): string {
+  if (!v) return '';
+  if (v.length > 63) return 'At most 63 characters.';
+  if (!SECRET_NAME_RE.test(v)) return 'Use capital letters, digits and underscores, starting with a letter, for example LINEAR_API_KEY.';
+  return '';
+}

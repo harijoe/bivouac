@@ -7,6 +7,7 @@ import { ConfirmDialog } from '@/components/app/confirm-dialog';
 import { ErrorNote, EmptyState, Note } from '@/components/app/misc';
 import { ProjectAlias } from '@/components/app/project-alias';
 import { EnvSnapshots } from '@/components/app/env-snapshots';
+import { ProjectMcp } from '@/components/app/project-mcp';
 import { RepoPicker, TokenRepoForm } from '@/components/app/repo-picker';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -74,6 +75,7 @@ function ProjectRow({ p, accounts, admin, session, onChange }: { p: ProjectWithT
       <div className="-mx-4 divide-y border-t">
         <ProjectAlias p={p} session={session} admin={admin} onChange={onChange} />
         <EnvSnapshots p={p} admin={admin} />
+        {admin && <ProjectMcp p={p} />}
       </div>
     </li>
   );

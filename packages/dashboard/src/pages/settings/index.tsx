@@ -9,6 +9,7 @@ import { AccessSection } from './access';
 import { AdvancedSection } from './advanced';
 import { ChatSection } from './chat';
 import { ClaudeSection } from './claude';
+import { Context7Section } from './context7';
 import { DomainSection } from './domain';
 import { ProjectsSection } from './projects';
 import type { SectionProps, SettingsData } from './types';
@@ -17,6 +18,7 @@ import { UpdatesSection } from './updates';
 interface SectionDef { id: string; label: string; adminOnly?: boolean; component: ComponentType<SectionProps> }
 const SECTIONS: SectionDef[] = [
   { id: 'claude', label: 'Claude', component: ClaudeSection },
+  { id: 'context7', label: 'Context7', adminOnly: true, component: Context7Section },
   { id: 'projects', label: 'Projects', component: ProjectsSection },
   { id: 'chat', label: 'Chat connection', component: ChatSection },
   { id: 'domain', label: 'Address', adminOnly: true, component: DomainSection },

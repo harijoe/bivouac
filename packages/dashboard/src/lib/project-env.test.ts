@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aliasError, aliasUrl, fmtBytes, parsePaths, pathsError, shortFingerprint } from './project-env';
+import { aliasError, aliasUrl, fmtBytes, parsePaths, pathsError, secretNameError, shortFingerprint } from './project-env';
 
 describe('fmtBytes', () => {
   it('formats', () => {
@@ -31,4 +31,14 @@ describe('paths', () => {
     expect(pathsError(Array.from({ length: 11 }, (_, i) => `/p${i}`))).toContain('At most 10');
   });
   it('shortens', () => expect(shortFingerprint('abcdef0123456789')).toBe('abcdef012345'));
+});
+
+describe('secretNameError', () => {
+  it('validates', () => {
+    expect(secretNameError('')).toBe('');
+    expect(secretNameError('LINEAR_API_KEY')).toBe('');
+    expect(secretNameError('linear')).not.toBe('');
+    expect(secretNameError('1KEY')).not.toBe('');
+    expect(secretNameError('A'.repeat(64))).not.toBe('');
+  });
 });

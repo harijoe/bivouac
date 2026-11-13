@@ -11,6 +11,7 @@ import { TaskHistory } from '@/components/app/task-history';
 import { ResumeButton, TaskLimits } from '@/components/app/task-limits';
 import { TaskManage } from '@/components/app/task-manage';
 import { TaskShares } from '@/components/app/task-shares';
+import { TaskTooling } from '@/components/app/task-tooling';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -145,6 +146,8 @@ export function TaskPage({ project, name }: { project: string; name: string }) {
         </>
       )}
       {task.configError && <Note tone="warn">The <code className="font-mono">bivouac.yml</code> in this branch has a problem, so the previous settings are still used: {task.configError}</Note>}
+
+      <TaskTooling tooling={task.tooling ?? null} />
 
       <form className="space-y-2 rounded-lg border p-4" onSubmit={submitMessage}>
         <Label htmlFor="instruction">Send a message to the agent</Label>
