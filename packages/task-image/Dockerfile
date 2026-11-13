@@ -13,6 +13,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/bivouac && npm install --prefix /opt/bivouac --no-audit --no-fund --omit=dev playwright-core@1.65.0 && npm cache clean --force
 ENV BIVOUAC_CHROMIUM=/usr/bin/chromium
+# MCP servers handed to the agent (pinned): Playwright MCP drives the Chromium above, Context7 serves library documentation.
+ARG PLAYWRIGHT_MCP_VERSION=0.0.85
+ARG CONTEXT7_MCP_VERSION=4.7.0
+RUN mkdir -p /opt/bivouac/mcp && npm install --prefix /opt/bivouac/mcp --no-audit --no-fund --omit=dev @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} @upstash/context7-mcp@${CONTEXT7_MCP_VERSION} && npm cache clean --force
+# Skills for the agent (Apache-2.0, licence files kept next to each skill), pinned to a commit of github.com/anthropics/skills.
+ARG ANTHROPIC_SKILLS_COMMIT=2c5958ecac7cee2b583967a2c4981d0f4a75c579
+RUN git init -q /tmp/anthropic-skills && cd /tmp/anthropic-skills \
+    && git fetch -q --depth 1 https://github.com/anthropics/skills ${ANTHROPIC_SKILLS_COMMIT} && git checkout -q FETCH_HEAD \
+    && mkdir -p /home/node/.claude/skills && cp -r skills/frontend-design skills/webapp-testing /home/node/.claude/skills/ \
+    && chown -R node:node /home/node/.claude && rm -rf /tmp/anthropic-skills
 # mise installs the tool versions a repository asks for (Node, pnpm, Python, Go, Rust…) without root, into /mise, which is a
 # per-project volume. The versions of a task are written to /workspace/.bivouac/mise.toml by the daemon.
 RUN arch=$([ "${TARGETARCH:-amd64}" = "arm64" ] && echo arm64 || echo x64) \
