@@ -130,6 +130,14 @@ const commands = {
     if (args.expect === 'scheduled') { check(r.json.scheduled === true && r.json.started === false, 'the update is scheduled until no task runs'); return; }
     check(r.json.started === true, 'update running');
     const steps = new Set();
+    const seen = { raw502: 0, friendly: 0, polls: 0 };
+    let polling = true;
+    const poller = (async () => {
+      while (polling) {
+        try { const t = await (await fetch(`${BASE}/`)).text(); seen.polls++; if (/Bad Gateway/i.test(t)) seen.raw502++; if (/bivouac is restarting/.test(t)) seen.friendly++; } catch { /* connection refused */ }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    })();
     const end = await waitFor(async () => {
       try {
         const u = (await dash('GET', '/api/update')).json;
@@ -137,6 +145,9 @@ const commands = {
         return u.progress && u.progress.to === args.to && ['done', 'rolled_back', 'failed'].includes(u.progress.state) ? u : false;
       } catch { return false; }  // the web service restarts during the update
     }, 600000, 2000, 'the update to finish');
+    polling = false; await poller;
+    console.log(`  dashboard polled ${seen.polls} times during the update, restarting page served ${seen.friendly} times`);
+    check(seen.raw502 === 0, 'no raw "Bad Gateway" body reached a client during the restart');
     console.log(`  steps seen from the dashboard: ${[...steps].join(' → ')}`);
     if (args.result === 'rolled_back') {
       check(end.progress.state === 'rolled_back', 'the broken version was rolled back automatically');

@@ -12,6 +12,8 @@ describe('traefik dynamic config', () => {
   it('routes the dashboard and each task through forwardAuth', () => {
     const c = buildTraefikConfig(cfg, [{ id: 42, name: 'login-page', project: 'mon-app', ports: [{ name: 'web', port: 5173, primary: true }] }, { id: 43, name: 'not-started', project: 'mon-app', ports: [] }]);
     expect(c.http.routers['bivouac-web'].rule).toBe('Host(`1-2-3-4.sslip.io`)');
+    expect(c.http.routers['bivouac-web'].middlewares).toEqual(['bivouac-restarting']);
+    expect(c.http.middlewares['bivouac-restarting'].errors).toMatchObject({ status: ['502-504'], service: 'bivouac-pages', query: '/restarting.html' });
     const r = c.http.routers['bivouac-t42'];
     expect(r.rule).toBe('Host(`login-page.mon-app.1-2-3-4.sslip.io`)');
     expect(r.middlewares).toEqual(['bivouac-preview-auth']);

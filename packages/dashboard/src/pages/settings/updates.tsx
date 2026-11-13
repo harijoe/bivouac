@@ -44,7 +44,9 @@ function Progress({ st, offline }: { st: UpdateStatus; offline: boolean }) {
             );
           })}
         </ol>
-        {p.state === 'running' && <p className="text-sm text-muted-foreground">{offline ? 'bivouac is restarting. This page reconnects by itself.' : 'This takes about a minute. You can leave this page open.'}</p>}
+        {p.state === 'running' && (offline
+          ? <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status"><Loader2 className="size-4 animate-spin" aria-hidden="true" />Restarting… This page reloads by itself once the new version answers.</p>
+          : <p className="text-sm text-muted-foreground">This takes about a minute. You can leave this page open.</p>)}
         {p.state === 'rolled_back' && <Note tone="warn" title={`bivouac is back on version ${p.from}`}>{p.error}</Note>}
         {p.state === 'failed' && <Note tone="error" title="The update failed">{p.error} Try again, or run the installer again over SSH.</Note>}
         {p.state === 'done' && <Note tone="ok">Your projects, tasks and settings are unchanged. Reloading…</Note>}
@@ -127,9 +129,20 @@ export function UpdatesSection({ s, session }: SectionProps) {
 
   // once the new version answers, load its dashboard
   useEffect(() => { if (st && st.current !== loadedVersion.current) location.reload(); }, [st]);
+  const finished = st?.progress?.state === 'done' && startedHere.current;
   useEffect(() => {
-    if (st?.progress?.state === 'done' && startedHere.current) { const t = setTimeout(() => location.reload(), 1500); return () => clearTimeout(t); }
-  }, [st]);
+    if (!finished) return;
+    let stop = false;
+    const wait = async () => {
+      while (!stop) {
+        const ok = await fetch('/api/health').then((r) => r.ok && r.headers.get('content-type')?.includes('json')).catch(() => false);
+        if (ok) { location.reload(); return; }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    };
+    void wait();
+    return () => { stop = true; };
+  }, [finished]);
 
   const heading = (
     <div>

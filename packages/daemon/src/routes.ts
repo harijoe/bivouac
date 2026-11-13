@@ -35,10 +35,11 @@ export function buildTraefikConfig(cfg: Pick<DaemonConfig, 'domain' | 'previewSc
   const entry = https ? 'websecure' : 'web';
   const tls = https ? (cfg.certResolver ? { certResolver: cfg.certResolver } : {}) : undefined;
   const routers: Record<string, any> = {
-    'bivouac-web': { rule: `Host(\`${cfg.domain}\`)`, entryPoints: [entry], service: 'bivouac-web', ...(tls ? { tls } : {}) },
+    'bivouac-web': { rule: `Host(\`${cfg.domain}\`)`, entryPoints: [entry], service: 'bivouac-web', middlewares: ['bivouac-restarting'], ...(tls ? { tls } : {}) },
   };
   const services: Record<string, any> = {
     'bivouac-web': { loadBalancer: { servers: [{ url: `http://${cfg.webHost}:${cfg.port}` }] } },
+    'bivouac-pages': { loadBalancer: { servers: [{ url: 'http://bivouac-pages:8080' }] } },
   };
   for (const t of tasks) {
     for (const p of t.ports) {
@@ -60,6 +61,7 @@ export function buildTraefikConfig(cfg: Pick<DaemonConfig, 'domain' | 'previewSc
       routers,
       services,
       middlewares: {
+        'bivouac-restarting': { errors: { status: ['502-504'], service: 'bivouac-pages', query: '/restarting.html' } },
         'bivouac-preview-auth': {
           forwardAuth: {
             address: `http://${cfg.webHost}:${cfg.internalPort}/internal/preview-auth`,
