@@ -134,7 +134,7 @@ A=$(jq -r .multi.alpha "$STATE"); B=$(jq -r .multi.beta "$STATE")
 
 say "STEP 10: sidecars are per task, limited, and never published on the host"
 expect_ok "each task has its own postgres container" "docker ps --format '{{.Names}}' | grep -qx bivouac-task-$A-svc-postgres && docker ps --format '{{.Names}}' | grep -qx bivouac-task-$B-svc-postgres"
-expect_ok "postgres has a memory limit (512m) and a CPU limit" "[ \"\$(docker inspect -f '{{.HostConfig.Memory}}' bivouac-task-$A-svc-postgres)\" = 536870912 ] && [ \"\$(docker inspect -f '{{.HostConfig.NanoCpus}}' bivouac-task-$A-svc-postgres)\" -gt 0 ]"
+expect_ok "postgres has a memory limit (1g) and a CPU limit" "[ \"\$(docker inspect -f '{{.HostConfig.Memory}}' bivouac-task-$A-svc-postgres)\" = 1073741824 ] && [ \"\$(docker inspect -f '{{.HostConfig.NanoCpus}}' bivouac-task-$A-svc-postgres)\" -gt 0 ]"
 expect_ok "no postgres port on the host" "! ss -Hltn | awk '{print \$4}' | grep -q ':5432\$' && [ -z \"\$(docker port bivouac-task-$A-svc-postgres)\" ]"
 SSHR "docker exec bivouac-task-$A-svc-postgres psql -U postgres -qc 'create table only_in_alpha(x int)'"
 SSHR "docker exec bivouac-task-$A-svc-postgres psql -U postgres -qc 'insert into only_in_alpha values (42)'"
