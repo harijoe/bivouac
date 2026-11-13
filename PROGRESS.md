@@ -6,6 +6,9 @@ Mission : donner à l'agent de tâche un navigateur (Playwright MCP), la doc à 
 - Image : +84 Mo sur disque, +12 Mo compressés (voir CHANGELOG).
 - **E2E sur VM Hetzner neuve** (`scripts/e2e-fresh-vps.sh --real --staging`, vrai CLI claude) : **PASSÉ**. `get_task` liste playwright:connected et context7:connected, skills frontend-design et webapp-testing ; l'agent a appelé le Playwright MCP 8 fois (navigate, resize, console, click, screenshot) et chargé le skill `frontend-design`. VM et clé SSH supprimées ; `bivouac-manual` intacte.
 - Le tag `v0.6.0` (df3172d, CI en échec : tests corrigés depuis) est déplacé sur le dernier commit avant publication ; aucune release publiée.
+- **Release** : tag `v0.6.0` sur 588c483, CI verte sur `main` et sur le tag (test, integration, images) ; images `ghcr.io/harijoe/bivouac-{daemon,task}` `0.6.0` tirées en anonyme (DOCKER_CONFIG vide) ; release GitHub **en brouillon** (id 444295480, notes de la section 0.6.0) : tu la publies, puis tu testes la mise à jour 0.5.1 → 0.6.0 depuis le dashboard (c'est aussi le test réel de la page « Restarting… »).
+- À valider par Julien : lecture critique de la section « Agent tools » (375 px et ordinateur), vraie tâche sur ton projet avec le Playwright MCP, saisie d'un secret MCP et approbation d'un serveur, `skills: [taste-skill]` sur un vrai projet.
+- Non fait : rien de reporté.
 
 ## Journal v0.5.1 (2026-11-13)
 Release des correctifs de la revue v0.5, sans nouveau code.
@@ -170,3 +173,5 @@ MISSION_V05_TERMINEE
 MISSION_REVIEW_V05_TERMINEE
 
 MISSION_V051_TERMINEE
+
+MISSION_V06_TERMINEE
